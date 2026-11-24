@@ -10,7 +10,7 @@
   <!-- Librerías servidas localmente (sin dependencias de CDN de terceros) -->
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css', v='4') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fontawesome/css/all.min.css', v='4') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='11') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='33') }}">
 </head>
 <body>
   <header class="navbar">
@@ -18,11 +18,21 @@
       <i class="fa-solid fa-water-ladder brand-icon"></i>
       <div>
         <h1>DGA Water Monitor</h1>
-        <span class="subtitle">Monitoreo hidrométrico, embalses y alertas DGA (MOP Chile)</span>
+        <span class="subtitle">Monitoreo hidrométrico, ríos, embalses y lagos DGA (MOP Chile)</span>
       </div>
     </div>
 
+    <div class="chile-clock" id="chile-clock" title="Hora oficial de Chile (America/Santiago)">
+      <div class="chile-clock-time" id="chile-clock-time">--:--:--</div>
+      <div class="chile-clock-date" id="chile-clock-date">--</div>
+    </div>
+
     <div class="nav-actions">
+      <button id="btn-history" class="btn btn-hud-history" type="button" title="Ver registro histórico temporal de alertas (30 días)">
+        <i class="fa-solid fa-clock-rotate-left"></i>
+        <span>Historial alertas</span>
+        <span id="history-badge" class="history-count-pill">0</span>
+      </button>
       <div class="live-pill" id="live-pill">
         <span class="live-indicator"></span>
         <span id="sync-status">Conectando...</span>
@@ -30,8 +40,8 @@
       <button id="btn-sound" class="btn btn-icon active" type="button" title="Silenciar alertas" aria-pressed="true">
         <i class="fa-solid fa-bell"></i>
       </button>
-      <button id="btn-sync" class="btn btn-primary" type="button">
-        <i class="fa-solid fa-arrows-rotate" id="sync-spinner"></i> Actualizar DGA
+      <button id="btn-notify" class="btn btn-icon" type="button" title="Activar notificaciones del navegador" aria-pressed="false">
+        <i class="fa-solid fa-tower-broadcast"></i>
       </button>
     </div>
   </header>
@@ -83,11 +93,11 @@
         <div class="kpi-label">Preventivas / azules</div>
       </div>
     </div>
-    <div class="kpi-card" data-kpi-filter="all" role="button" tabindex="0" title="Ver todas las estaciones en el mapa">
+    <div class="kpi-card kpi-static" title="Hora de la última sincronización con la DGA">
       <div class="kpi-icon purple"><i class="fa-solid fa-clock-rotate-left"></i></div>
       <div class="kpi-data">
         <div class="kpi-value small" id="kpi-time">--:--:--</div>
-        <div class="kpi-label">Última sinc. (Ver todos)</div>
+        <div class="kpi-label">Última sincronización</div>
         <div class="kpi-sub" id="kpi-time-sub">En vivo · cada 60 s</div>
       </div>
     </div>
@@ -133,11 +143,17 @@
           <i class="fa-solid fa-magnifying-glass search-icon"></i>
           <input type="search" id="search-input" maxlength="60" autocomplete="off"
                  placeholder="Buscar río, embalse o código..." class="search-input">
+          <div id="search-suggestions" class="search-suggestions hidden" role="listbox" aria-label="Sugerencias de estaciones"></div>
         </div>
       </div>
 
       <div id="map" role="application" aria-label="Mapa de estaciones"></div>
       <div id="map-loading" class="map-loading hidden"><i class="fa-solid fa-spinner fa-spin"></i> Cargando estaciones de la DGA...</div>
+
+      <div class="map-br-stack">
+      <button id="btn-sync" class="btn btn-primary map-sync-btn" type="button" title="Forzar sincronización con la DGA">
+        <i class="fa-solid fa-arrows-rotate" id="sync-spinner"></i> Actualizar DGA
+      </button>
 
       <div class="map-legend">
         <div class="legend-item"><span class="legend-dot dot-normal-river"></span> Río (normal)</div>
@@ -146,6 +162,12 @@
         <div class="legend-item"><span class="legend-dot dot-preventiva"></span> Alerta azul / preventiva</div>
         <div class="legend-item"><span class="legend-dot dot-alert"></span> Advertencia / amarilla</div>
         <div class="legend-item"><span class="legend-dot dot-critical"></span> Crítica / roja</div>
+      </div>
+      </div>
+
+      <div id="map-warning-banner" class="map-warning-banner" role="note">
+        <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+        <span>Esta web no reemplaza las alertas de SENAPRED ni de las autoridades. Ante riesgo real, prioriza siempre los canales oficiales de emergencia.</span>
       </div>
     </section>
 
@@ -180,45 +202,81 @@
   </main>
 
   <div id="modal-station" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-nombre">
-    <div class="modal-card">
-      <div class="modal-header">
-        <div class="modal-title-group">
-          <span id="modal-badge-tipo" class="badge badge-info">Tipo</span>
-          <h2 id="modal-nombre">Estación</h2>
-          <span id="modal-codigo" class="modal-sub">Código: --</span>
-        </div>
-        <button id="modal-close" class="btn-close" type="button" aria-label="Cerrar">&times;</button>
-      </div>
+    <div class="modal-card hud-inspector">
+      <div id="modal-inspector-main" class="inspector-main accent-normal">
+        <div class="inspector-top">
+          <div class="inspector-title-wrap">
+            <div class="inspector-title-line">
+              <h2 id="modal-nombre">Estación</h2>
+            </div>
+          </div>
 
-      <div class="modal-body">
-        <div class="modal-metrics-grid">
-          <div class="metric-box">
-            <div class="metric-title" id="lbl-val-1">--</div>
-            <div class="metric-num" id="val-met-1">--</div>
-            <div class="metric-unit" id="unit-met-1"></div>
-          </div>
-          <div class="metric-box">
-            <div class="metric-title" id="lbl-val-2">--</div>
-            <div class="metric-num" id="val-met-2">--</div>
-            <div class="metric-unit" id="unit-met-2"></div>
-          </div>
-          <div class="metric-box">
-            <div class="metric-title">Estado</div>
-            <div class="metric-num" id="val-estado">--</div>
-            <div class="metric-unit" id="val-subestado"></div>
+          <div class="inspector-hero-right">
+            <div class="hero-metric">
+              <span id="modal-hero-val" class="hero-num">--</span>
+              <span id="modal-hero-unit" class="hero-unit">m³/s</span>
+            </div>
+            <button id="modal-close" class="btn-close" type="button" aria-label="Cerrar">&times;</button>
           </div>
         </div>
 
-        <div id="modal-stale" class="info-banner hidden">
+        <div class="inspector-meta-grid">
+          <div class="inspector-meta-left">
+            <div class="inspector-type-row">
+              <span id="modal-type-dot" class="type-dot"></span>
+              <span id="modal-badge-tipo" class="type-label">Tipo</span>
+            </div>
+            <div class="inspector-status-row">
+              <span class="status-key">Estado</span>
+              <span id="modal-status-paren" class="status-paren">(normal)</span>
+            </div>
+            <div id="modal-source-box" class="source-tag">
+              <span class="source-dot"></span>
+              <span id="modal-source-text">DGA CHILE · MOP</span>
+            </div>
+          </div>
+
+          <div id="modal-alerta-banner" class="crimson-notice inspector-alert-callout hidden">
+            <i class="fa-solid fa-triangle-exclamation"></i> <span id="modal-alerta-texto"></span>
+          </div>
+        </div>
+
+        <div class="inspector-actions-row">
+          <div class="inspector-pills">
+            <button id="modal-btn-fly" class="hud-pill" type="button">
+              <i class="fa-solid fa-crosshairs"></i> Volar al punto
+            </button>
+            <button id="modal-btn-sat" class="hud-pill" type="button" title="Abrir ubicación satelital en Google Maps">
+              <i class="fa-solid fa-globe"></i> Satelital
+            </button>
+            <button id="modal-btn-thresh" class="hud-pill hud-pill-subtle" type="button" aria-expanded="false">
+              <i class="fa-solid fa-sliders"></i> Umbrales
+            </button>
+            <button id="modal-btn-history" class="hud-pill hud-pill-subtle" type="button" title="Ver evolución histórica (24 h / 7 días / 30 días)">
+              <i class="fa-solid fa-chart-line"></i> Evolución
+            </button>
+          </div>
+        </div>
+
+        <div id="modal-sync-meta" class="modal-sync-meta inspector-sync-meta">
+          <span id="modal-sinc"><i class="fa-regular fa-clock"></i> Sinc: --</span>
+          <span id="modal-medicion">📡 Medición: --</span>
+        </div>
+
+        <hr class="hud-divider">
+
+        <div id="modal-specs" class="spec-table"></div>
+
+        <div id="modal-stale" class="amber-notice hidden">
           <i class="fa-solid fa-clock"></i> <span id="modal-stale-texto"></span>
         </div>
-        <div id="modal-alerta-banner" class="alert-banner hidden">
-          <i class="fa-solid fa-triangle-exclamation"></i> <span id="modal-alerta-texto"></span>
-        </div>
 
-        <div class="threshold-form-box">
-          <h4><i class="fa-solid fa-sliders"></i> Umbrales personalizados</h4>
-          <p class="form-desc" id="form-desc">Deja ambos campos vacíos para eliminar la regla.</p>
+        <div id="modal-thresh-wrap" class="threshold-form-box hidden">
+          <hr class="hud-divider">
+          <div class="thresh-header">
+            <h4><i class="fa-solid fa-sliders"></i> Umbrales personalizados</h4>
+            <p class="form-desc" id="form-desc">Deja ambos campos vacíos para eliminar la regla.</p>
+          </div>
 
           <form id="form-threshold" novalidate>
             <input type="hidden" id="form-tipo">
@@ -247,10 +305,74 @@
           </form>
         </div>
       </div>
+
+      <div id="modal-nearby-section" class="nearby-section">
+        <div id="modal-nearby-title" class="nearby-heading">ESTACIONES CERCANAS (0 TOTAL)</div>
+        <div id="modal-nearby-list" class="nearby-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-history" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="history-title">
+    <div class="modal-card hud-history-card">
+      <div id="history-panel" class="history-panel accent-normal">
+        <div class="history-head">
+          <div class="history-head-left">
+            <div class="history-kicker">REGISTRO HISTÓRICO DE ALERTAS · RETENCIÓN TEMPORAL 30 DÍAS</div>
+            <div class="history-title-row">
+              <h2 id="history-title">Evolución de estaciones</h2>
+              <span id="history-level-badge" class="badge badge-normal hidden">--</span>
+            </div>
+            <div id="history-subtitle" class="history-subtitle">Selecciona una estación o vista comparativa</div>
+          </div>
+          <button id="history-close" class="btn-close" type="button" aria-label="Cerrar">&times;</button>
+        </div>
+
+        <div class="history-controls">
+          <div class="history-control-group" id="history-periods" role="group" aria-label="Período de tiempo">
+            <button class="hud-pill active" data-period="24h" type="button">24 h</button>
+            <button class="hud-pill" data-period="7d" type="button">7 días</button>
+            <button class="hud-pill" data-period="30d" type="button">30 días</button>
+          </div>
+          <div class="history-control-group" id="history-level-filter" role="group" aria-label="Filtrar por severidad">
+            <button class="hud-pill hud-pill-subtle active" data-level="ALL" type="button">Todas</button>
+            <button class="hud-pill hud-pill-subtle" data-level="CRITICO" type="button">Críticas</button>
+            <button class="hud-pill hud-pill-subtle" data-level="ADVERTENCIA" type="button">Advertencias</button>
+            <button class="hud-pill hud-pill-subtle" data-level="PREVENTIVA" type="button">Preventivas</button>
+          </div>
+          <div class="history-select-wrap">
+            <label for="history-station-select" class="sr-only">Estación</label>
+            <select id="history-station-select" class="form-select history-select" aria-label="Seleccionar estación del registro histórico"></select>
+          </div>
+        </div>
+
+        <div id="history-station-chips" class="history-station-chips"></div>
+
+        <div id="history-stats" class="history-stats"></div>
+
+        <div id="history-chart-box" class="history-chart-box"></div>
+
+        <div class="history-readout-row">
+          <div id="history-hover-readout" class="history-hover-readout">--</div>
+          <div id="history-legend" class="history-legend"></div>
+        </div>
+
+        <div id="history-log-section" class="history-log-section">
+          <div class="history-log-header">
+            <span id="history-log-title">REGISTRO TEMPORAL GUARDADO</span>
+            <span id="history-retention-info" class="history-retention-tag">30 días</span>
+          </div>
+          <div id="history-log-list" class="history-log-list"></div>
+        </div>
+
+        <p id="history-footnote" class="history-footnote">
+          Hora de medición informada por la DGA. Las alertas Críticas, Advertencias y Preventivas se guardan temporalmente durante 30 días en cada sincronización.
+        </p>
+      </div>
     </div>
   </div>
 
   <script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js', v='4') }}"></script>
-  <script src="{{ url_for('static', filename='app.js', v='14') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='39') }}"></script>
 </body>
 </html>

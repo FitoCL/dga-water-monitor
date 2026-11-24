@@ -160,6 +160,20 @@ def get_alertas():
     return jsonify(service.get_alertas())
 
 
+@app.route("/api/alertas/historial")
+def get_alertas_historial():
+    periodo = request.args.get("periodo", "30d").strip()
+    if periodo not in ("24h", "7d", "30d"):
+        abort(400, description="Periodo inválido. Usa 24h, 7d o 30d.")
+    codigo = request.args.get("codigo", "").strip() or None
+    if codigo and not CODE_RE.match(codigo):
+        abort(400, description="Código de estación inválido.")
+    nivel = request.args.get("nivel", "ALL").strip().upper()
+    if nivel not in ("ALL", "CRITICO", "ADVERTENCIA", "PREVENTIVA"):
+        abort(400, description="Nivel inválido.")
+    return jsonify(service.get_alerts_history(periodo=periodo, codigo=codigo, nivel=None if nivel == "ALL" else nivel))
+
+
 @app.route("/api/umbrales", methods=["GET"])
 def get_umbrales():
     return jsonify(service.get_config())

@@ -6,5 +6,6 @@ venv/
 .env
 data/.csrf_token
 data/cache.json
+data/alerts_history.json
 data/*.bak
 data/.tmp_*.json

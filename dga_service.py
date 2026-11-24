@@ -38,6 +38,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 CONFIG_PATH = os.path.join(DATA_DIR, "alerts_config.json")
 CACHE_PATH = os.path.join(DATA_DIR, "cache.json")
+HISTORY_PATH = os.path.join(DATA_DIR, "alerts_history.json")
+HISTORY_VERSION = 1
+HISTORY_RETENTION_DAYS = 30
+MAX_HISTORY_POINTS_PER_STATION = 3000
 
 MAPAS2_URL = "https://mapas2.mop.gob.cl"
 ARCGIS_DGA = "https://rest-sit.mop.gob.cl/arcgis/rest/services/DGA"
@@ -87,6 +91,19 @@ def now():
 
 def iso(dt):
     return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else None
+
+
+def _alert_fecha_ts(fecha_str):
+    """Convierte la fecha/hora de medición de una alerta a timestamp numérico para ordenar."""
+    if not fecha_str:
+        return 0.0
+    s = str(fecha_str).strip()
+    for fmt_str in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt_str).timestamp()
+        except ValueError:
+            continue
+    return 0.0
 
 
 def parse_iso(s):
@@ -209,6 +226,7 @@ class DGAService:
 
         self.cache = self._load_cache()
         self.config = self._load_config()
+        self.history = self._load_history()
         self._alertas = []
         self._estado_por_codigo = {}
         self.recompute_alerts()
@@ -253,6 +271,48 @@ class DGAService:
 
     def _save_config(self):
         atomic_write_json(CONFIG_PATH, self.config, keep_backup=True)
+
+    def _load_history(self):
+        empty = {"version": HISTORY_VERSION, "retention_days": HISTORY_RETENTION_DAYS, "updated": None, "stations": {}}
+        if not os.path.exists(HISTORY_PATH):
+            return empty
+        try:
+            raw = load_json(HISTORY_PATH)
+            if not isinstance(raw, dict) or raw.get("version") != HISTORY_VERSION:
+                return empty
+            stations = raw.get("stations")
+            if not isinstance(stations, dict):
+                return empty
+            cutoff = now().timestamp() - HISTORY_RETENTION_DAYS * 86400
+            clean_stations = {}
+            for skey, st in stations.items():
+                if not isinstance(st, dict):
+                    continue
+                pts = [
+                    p for p in (st.get("points") or [])
+                    if isinstance(p, dict) and isinstance(p.get("ts"), (int, float))
+                    and p["ts"] >= cutoff
+                    and p.get("nivel") in ("CRITICO", "ADVERTENCIA", "PREVENTIVA")
+                ]
+                if not pts:
+                    continue
+                pts.sort(key=lambda p: p["ts"])
+                st_clean = dict(st)
+                st_clean["points"] = pts[-MAX_HISTORY_POINTS_PER_STATION:]
+                clean_stations[str(skey)] = st_clean
+            empty["updated"] = raw.get("updated")
+            empty["stations"] = clean_stations
+        except Exception as e:
+            log.warning("alerts_history.json corrupto, se regenerará: %s", e)
+        return empty
+
+    def _save_history(self):
+        with self._lock:
+            snapshot = json.loads(json.dumps(self.history))
+        try:
+            atomic_write_json(HISTORY_PATH, snapshot)
+        except Exception as e:
+            log.error("No se pudo guardar alerts_history.json: %s", e)
 
     # ------------------------------------------------------------------ mapas2 (CSRF)
     def _refresh_csrf(self):
@@ -757,7 +817,11 @@ class DGAService:
                 alertas.append({**base, "id": f"emb-max-{emb['codigo']}", "nivel_alerta": "ADVERTENCIA", "umbral": umb,
                                 "mensaje": f"Volumen {vol} Mm³ sobre el máximo configurado ({umb} Mm³)."})
 
-        alertas.sort(key=lambda a: -SEVERITY.get(a["nivel_alerta"], 0))
+        alertas.sort(key=lambda a: (
+            -SEVERITY.get(a["nivel_alerta"], 0),
+            -_alert_fecha_ts(a.get("fecha")),
+            str(a.get("nombre") or "").lower(),
+        ))
         estado = {}
         for a in alertas:
             prev = estado.get(a["codigo"])
@@ -766,7 +830,218 @@ class DGAService:
         with self._lock:
             self._alertas = alertas
             self._estado_por_codigo = estado
+        self.record_alerts_history(alertas)
         return alertas
+
+    def record_alerts_history(self, alertas):
+        """Guarda temporalmente (30 días) alertas Críticas, Advertencia y Preventiva por estación."""
+        now_dt = now()
+        now_ts = now_dt.timestamp()
+        now_iso = iso(now_dt)
+        cutoff = now_ts - HISTORY_RETENTION_DAYS * 86400
+        dirty = False
+
+        with self._lock:
+            stations = self.history.setdefault("stations", {})
+            station_meta = {}
+            for reg in self.cache.get("estaciones_by_region", {}).values():
+                for e in reg.get("items", []):
+                    station_meta[e["codigo"]] = (e.get("comuna") or "", e.get("region_nombre") or "")
+
+            for a in alertas:
+                nivel = a.get("nivel_alerta")
+                if nivel not in ("CRITICO", "ADVERTENCIA", "PREVENTIVA"):
+                    continue
+                tipo_el = a.get("tipo_elemento") or "estacion"
+                codigo = base_code(a.get("codigo")) if tipo_el == "estacion" else str(a.get("codigo") or "").strip()
+                if not codigo:
+                    continue
+                skey = f"{tipo_el}:{codigo}"
+                pt_ts = _alert_fecha_ts(a.get("fecha"))
+                if pt_ts <= 0:
+                    pt_ts = now_ts
+                if pt_ts < cutoff:
+                    continue
+
+                comuna, region_nombre = station_meta.get(codigo, ("", ""))
+                st = stations.get(skey)
+                if st is None:
+                    st = {
+                        "key": skey,
+                        "codigo": codigo,
+                        "nombre": a.get("nombre") or codigo,
+                        "tipo_elemento": tipo_el,
+                        "comuna": comuna,
+                        "region_nombre": region_nombre,
+                        "unidad": a.get("unidad") or "",
+                        "fuente": a.get("fuente") or "DGA oficial",
+                        "umbrales": {},
+                        "points": [],
+                    }
+                    stations[skey] = st
+                    dirty = True
+                else:
+                    if a.get("nombre") and st.get("nombre") != a.get("nombre"):
+                        st["nombre"] = a["nombre"]
+                        dirty = True
+                    if comuna and not st.get("comuna"):
+                        st["comuna"] = comuna
+                    if region_nombre and not st.get("region_nombre"):
+                        st["region_nombre"] = region_nombre
+                    if a.get("unidad") and st.get("unidad") != a.get("unidad"):
+                        st["unidad"] = a["unidad"]
+
+                if a.get("umbral") is not None:
+                    umbrales = st.setdefault("umbrales", {})
+                    if umbrales.get(nivel) != a["umbral"]:
+                        umbrales[nivel] = a["umbral"]
+                        dirty = True
+
+                pt = {
+                    "ts": round(pt_ts, 3),
+                    "fecha": a.get("fecha") or now_iso,
+                    "sinc": a.get("sincronizado") or now_iso,
+                    "valor": a.get("valor_actual"),
+                    "umbral": a.get("umbral"),
+                    "nivel": nivel,
+                    "fuente": a.get("fuente") or "DGA oficial",
+                    "unidad": a.get("unidad") or "",
+                }
+                pts = st.setdefault("points", [])
+                dup = any(
+                    p.get("fecha") == pt["fecha"]
+                    and p.get("nivel") == pt["nivel"]
+                    and p.get("valor") == pt["valor"]
+                    and p.get("fuente") == pt["fuente"]
+                    for p in pts
+                )
+                if not dup:
+                    pts.append(pt)
+                    pts.sort(key=lambda p: p.get("ts") or 0)
+                    if len(pts) > MAX_HISTORY_POINTS_PER_STATION:
+                        st["points"] = pts[-MAX_HISTORY_POINTS_PER_STATION:]
+                    dirty = True
+
+            for skey in list(stations.keys()):
+                st = stations[skey]
+                pts = st.get("points") or []
+                pruned = [p for p in pts if (p.get("ts") or 0) >= cutoff]
+                if len(pruned) != len(pts):
+                    dirty = True
+                if not pruned:
+                    stations.pop(skey, None)
+                    dirty = True
+                    continue
+                st["points"] = pruned
+                last_pt = pruned[-1]
+                st["last_nivel"] = last_pt.get("nivel")
+                st["last_valor"] = last_pt.get("valor")
+                st["last_umbral"] = last_pt.get("umbral")
+                st["last_fecha"] = last_pt.get("fecha")
+                st["last_sincronizado"] = last_pt.get("sinc")
+                st["max_nivel"] = max((p.get("nivel") for p in pruned), key=lambda n: SEVERITY.get(n, 0))
+
+            if dirty:
+                self.history["updated"] = now_iso
+
+        if dirty:
+            self._save_history()
+
+    def get_alerts_history(self, periodo="30d", codigo=None, nivel=None):
+        """Retorna historial temporal (24h, 7d, 30d) de alertas por estación."""
+        period_days = {"24h": 1, "7d": 7, "30d": 30}
+        if periodo not in period_days:
+            periodo = "30d"
+        days = period_days[periodo]
+        self.ensure_realtime_fresh()
+
+        now_dt = now()
+        end_ts = now_dt.timestamp()
+        start_ts = end_ts - days * 86400
+        cutoff_30 = end_ts - HISTORY_RETENTION_DAYS * 86400
+        filter_nivel = nivel if nivel in ("CRITICO", "ADVERTENCIA", "PREVENTIVA") else None
+        filter_code = base_code(codigo) if codigo else None
+
+        stations_out = []
+        with self._lock:
+            cfg = self.config
+            history_updated = self.history.get("updated")
+            raw_stations = list((self.history.get("stations") or {}).values())
+            for st in raw_stations:
+                pts_30 = [p for p in (st.get("points") or []) if (p.get("ts") or 0) >= cutoff_30]
+                if not pts_30:
+                    continue
+                if filter_nivel and not any(p.get("nivel") == filter_nivel for p in pts_30):
+                    continue
+
+                win_pts = [p for p in pts_30 if start_ts <= (p.get("ts") or 0) <= end_ts + 3600]
+                vals = [p["valor"] for p in win_pts if isinstance(p.get("valor"), (int, float))]
+                umbrales = dict(st.get("umbrales") or {})
+                unit = st.get("unidad") or ""
+                if st.get("tipo_elemento") == "embalse" and unit == "Mm³":
+                    rule = (cfg.get("embalses") or {}).get(st.get("codigo")) or {}
+                    if rule.get("volumen_min") is not None:
+                        umbrales.setdefault("CRITICO", rule["volumen_min"])
+                    if rule.get("volumen_max") is not None:
+                        umbrales.setdefault("ADVERTENCIA", rule["volumen_max"])
+                elif st.get("tipo_elemento") == "estacion" and unit == "m³/s":
+                    rule = (cfg.get("estaciones") or {}).get(base_code(st.get("codigo"))) or {}
+                    if rule.get("caudal_max") is not None:
+                        umbrales.setdefault("CRITICO", rule["caudal_max"])
+                    if rule.get("caudal_min") is not None:
+                        umbrales.setdefault("ADVERTENCIA", rule["caudal_min"])
+
+                last_pt = win_pts[-1] if win_pts else pts_30[-1]
+                last_nivel = last_pt.get("nivel") or st.get("last_nivel") or "PREVENTIVA"
+                last_fecha = last_pt.get("fecha") or st.get("last_fecha")
+                max_nivel = max(
+                    (p.get("nivel") for p in (win_pts or pts_30)),
+                    key=lambda n: SEVERITY.get(n, 0),
+                )
+                code_match = (filter_code is None) or (base_code(st.get("codigo")) == filter_code)
+                stations_out.append({
+                    "key": st.get("key") or f"{st.get('tipo_elemento', 'estacion')}:{st.get('codigo')}",
+                    "codigo": st.get("codigo"),
+                    "nombre": st.get("nombre") or st.get("codigo"),
+                    "tipo_elemento": st.get("tipo_elemento") or "estacion",
+                    "comuna": st.get("comuna") or "",
+                    "region_nombre": st.get("region_nombre") or "",
+                    "unidad": unit,
+                    "fuente": st.get("fuente") or "DGA oficial",
+                    "last_nivel": last_nivel,
+                    "max_nivel": max_nivel,
+                    "last_valor": last_pt.get("valor"),
+                    "last_umbral": last_pt.get("umbral"),
+                    "last_fecha": last_fecha,
+                    "umbrales": umbrales,
+                    "stats": {
+                        "min": round_num(min(vals), 3) if vals else None,
+                        "max": round_num(max(vals), 3) if vals else None,
+                        "last": round_num(vals[-1], 3) if vals else None,
+                        "count": len(win_pts),
+                        "count_30d": len(pts_30),
+                        "critico_count": sum(1 for p in win_pts if p.get("nivel") == "CRITICO"),
+                        "advertencia_count": sum(1 for p in win_pts if p.get("nivel") == "ADVERTENCIA"),
+                        "preventiva_count": sum(1 for p in win_pts if p.get("nivel") == "PREVENTIVA"),
+                    },
+                    "points": win_pts if code_match else [],
+                })
+
+        stations_out.sort(key=lambda s: (
+            0 if s["stats"]["count"] > 0 else 1,
+            -SEVERITY.get(s["last_nivel"], 0),
+            -_alert_fecha_ts(s.get("last_fecha")),
+            str(s.get("nombre") or "").lower(),
+        ))
+        return {
+            "retention_days": HISTORY_RETENTION_DAYS,
+            "periodo": periodo,
+            "window_start": iso(now_dt - timedelta(days=days)),
+            "window_end": iso(now_dt),
+            "updated": history_updated,
+            "total_stations": len(stations_out),
+            "stations": stations_out,
+        }
 
     # ------------------------------------------------------------------ lecturas para la API
     def get_alertas(self):
@@ -890,6 +1165,7 @@ class DGAService:
                 "alertas_criticas": sum(a["nivel_alerta"] == "CRITICO" for a in alertas),
                 "alertas_advertencia": sum(a["nivel_alerta"] == "ADVERTENCIA" for a in alertas),
                 "alertas_preventivas": sum(a["nivel_alerta"] == "PREVENTIVA" for a in alertas),
+                "total_historial_estaciones": len(self.history.get("stations") or {}),
                 "cargando": bool(self._pending) or self._sync_lock.locked(),
             }
 
