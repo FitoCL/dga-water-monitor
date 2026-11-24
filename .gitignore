@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env
+data/.csrf_token
+data/cache.json
+data/*.bak
+data/.tmp_*.json

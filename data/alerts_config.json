@@ -1,0 +1,51 @@
+{
+  "general": {
+    "caudal_max_default": 60.0,
+    "caudal_min_default": 0.5,
+    "volumen_min_default": 20.0
+  },
+  "embalses": {
+    "05510003-9": {
+      "nombre": "Lago Peñuelas (LM)",
+      "volumen_min": 10.0,
+      "volumen_max": 90.0
+    },
+    "06054001-2": {
+      "nombre": "Embalse Rapel En El Muro",
+      "volumen_min": 250.0,
+      "volumen_max": 650.0
+    },
+    "08312002-9": {
+      "nombre": "Embalse Ralco",
+      "volumen_min": 400.0,
+      "volumen_max": 1100.0
+    },
+    "04506010-1": {
+      "nombre": "Embalse Recoleta (LM)",
+      "volumen_min": 50.0,
+      "volumen_max": 100.0
+    },
+    "04534002-3": {
+      "nombre": "Embalse Cogoti (LM)",
+      "volumen_min": 60.0,
+      "volumen_max": 140.0
+    }
+  },
+  "estaciones": {
+    "05701001": {
+      "nombre": "Rio Maipo En Las Hualtatas",
+      "caudal_min": 2.0,
+      "caudal_max": 70.0
+    },
+    "05710001": {
+      "nombre": "Rio Maipo En El Manzano",
+      "caudal_min": 5.0,
+      "caudal_max": 120.0
+    },
+    "05735026": {
+      "nombre": "Rio Mapocho En Rinconada",
+      "caudal_min": 0.2,
+      "caudal_max": 40.0
+    }
+  }
+}

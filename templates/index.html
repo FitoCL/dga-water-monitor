@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <meta name="admin-required" content="{{ 'true' if admin_required else 'false' }}">
+  <title>DGA Water Monitor - Sistema de Monitoreo Hidrológico y Alertas en Tiempo Real</title>
+
+  <!-- Librerías servidas localmente (sin dependencias de CDN de terceros) -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css', v='4') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fontawesome/css/all.min.css', v='4') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='11') }}">
+</head>
+<body>
+  <header class="navbar">
+    <div class="nav-brand">
+      <i class="fa-solid fa-water-ladder brand-icon"></i>
+      <div>
+        <h1>DGA Water Monitor</h1>
+        <span class="subtitle">Monitoreo hidrométrico, embalses y alertas DGA (MOP Chile)</span>
+      </div>
+    </div>
+
+    <div class="nav-actions">
+      <div class="live-pill" id="live-pill">
+        <span class="live-indicator"></span>
+        <span id="sync-status">Conectando...</span>
+      </div>
+      <button id="btn-sound" class="btn btn-icon active" type="button" title="Silenciar alertas" aria-pressed="true">
+        <i class="fa-solid fa-bell"></i>
+      </button>
+      <button id="btn-sync" class="btn btn-primary" type="button">
+        <i class="fa-solid fa-arrows-rotate" id="sync-spinner"></i> Actualizar DGA
+      </button>
+    </div>
+  </header>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <section class="kpi-banner">
+    <div class="kpi-card active-kpi" data-kpi-filter="rios" role="button" tabindex="0" title="Mostrar en mapa solo ríos activos con registro">
+      <div class="kpi-icon blue"><i class="fa-solid fa-water"></i></div>
+      <div class="kpi-data">
+        <div class="kpi-value" id="kpi-estaciones">--</div>
+        <div class="kpi-label">Ríos activos (con registro)</div>
+        <div class="kpi-sub" id="kpi-estaciones-sub">-- totales</div>
+      </div>
+    </div>
+    <div class="kpi-card" data-kpi-filter="inactivas" role="button" tabindex="0" title="Mostrar en mapa estaciones inactivas o sin registro">
+      <div class="kpi-icon slate"><i class="fa-solid fa-plug-circle-xmark"></i></div>
+      <div class="kpi-data">
+        <div class="kpi-value" id="kpi-inactivas">--</div>
+        <div class="kpi-label">Inactivas / Sin registro</div>
+        <div class="kpi-sub" id="kpi-inactivas-sub">-- inactivas · -- sin caudal</div>
+      </div>
+    </div>
+    <div class="kpi-card" data-kpi-filter="embalses" role="button" tabindex="0" title="Mostrar en mapa solo embalses y lagos">
+      <div class="kpi-icon cyan"><i class="fa-solid fa-mountain-sun"></i></div>
+      <div class="kpi-data">
+        <div class="kpi-value" id="kpi-embalses">--</div>
+        <div class="kpi-label">Embalses y lagos</div>
+      </div>
+    </div>
+    <div class="kpi-card kpi-critico" id="kpi-card-critico" data-kpi-filter="criticas" role="button" tabindex="0" title="Segmentar alertas críticas / rojas">
+      <div class="kpi-icon red"><i class="fa-solid fa-triangle-exclamation"></i></div>
+      <div class="kpi-data">
+        <div class="kpi-value" id="kpi-criticas">0</div>
+        <div class="kpi-label">Alertas críticas / rojas</div>
+      </div>
+    </div>
+    <div class="kpi-card" data-kpi-filter="advertencias" role="button" tabindex="0" title="Segmentar advertencias / amarillas">
+      <div class="kpi-icon yellow"><i class="fa-solid fa-circle-exclamation"></i></div>
+      <div class="kpi-data">
+        <div class="kpi-value" id="kpi-advertencias">0</div>
+        <div class="kpi-label">Advertencias / amarillas</div>
+      </div>
+    </div>
+    <div class="kpi-card" data-kpi-filter="preventivas" role="button" tabindex="0" title="Segmentar alertas preventivas / azules">
+      <div class="kpi-icon indigo"><i class="fa-solid fa-circle-info"></i></div>
+      <div class="kpi-data">
+        <div class="kpi-value" id="kpi-preventivas">0</div>
+        <div class="kpi-label">Preventivas / azules</div>
+      </div>
+    </div>
+    <div class="kpi-card" data-kpi-filter="all" role="button" tabindex="0" title="Ver todas las estaciones en el mapa">
+      <div class="kpi-icon purple"><i class="fa-solid fa-clock-rotate-left"></i></div>
+      <div class="kpi-data">
+        <div class="kpi-value small" id="kpi-time">--:--:--</div>
+        <div class="kpi-label">Última sinc. (Ver todos)</div>
+        <div class="kpi-sub" id="kpi-time-sub">En vivo · cada 60 s</div>
+      </div>
+    </div>
+  </section>
+
+  <main class="dashboard-layout">
+    <section class="map-container">
+      <div class="map-toolbar">
+        <div class="filter-group">
+          <label for="select-region"><i class="fa-solid fa-location-dot"></i> Región:</label>
+          <select id="select-region" class="form-select">
+            {% for codigo, nombre in regiones %}
+            <option value="{{ codigo }}">{{ '%02d' % (codigo|int) }} - {{ nombre }}</option>
+            {% endfor %}
+            <option value="all" selected>Todas las regiones</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <span><i class="fa-solid fa-filter"></i> Capas:</span>
+          <div class="pill-filters">
+            <button class="pill" type="button" data-filter="all">Todos</button>
+            <button class="pill" type="button" data-filter="embalses"><i class="fa-solid fa-mountain"></i> Embalses</button>
+            <button class="pill active" type="button" data-filter="rios"><i class="fa-solid fa-water"></i> Ríos</button>
+            <button class="pill" type="button" data-filter="inactivas"><i class="fa-solid fa-plug-circle-xmark"></i> Inactivas / S.R.</button>
+            <button class="pill" type="button" data-filter="alertas"><i class="fa-solid fa-bell"></i> Con alertas</button>
+          </div>
+        </div>
+
+        <div class="filter-group">
+          <label for="select-basemap"><i class="fa-solid fa-moon"></i> Estilo:</label>
+          <select id="select-basemap" class="form-select">
+            <option value="dark" selected>Oscuro (Dark)</option>
+            <option value="topo_dark">Topográfico Oscuro (Ríos)</option>
+            <option value="esri_dark">Gris Oscuro (Esri)</option>
+            <option value="light">Claro (OSM)</option>
+            <option value="topo">Topográfico Claro (Esri)</option>
+            <option value="sat">Satelital (Esri)</option>
+          </select>
+        </div>
+
+        <div class="filter-group search-group">
+          <i class="fa-solid fa-magnifying-glass search-icon"></i>
+          <input type="search" id="search-input" maxlength="60" autocomplete="off"
+                 placeholder="Buscar río, embalse o código..." class="search-input">
+        </div>
+      </div>
+
+      <div id="map" role="application" aria-label="Mapa de estaciones"></div>
+      <div id="map-loading" class="map-loading hidden"><i class="fa-solid fa-spinner fa-spin"></i> Cargando estaciones de la DGA...</div>
+
+      <div class="map-legend">
+        <div class="legend-item"><span class="legend-dot dot-normal-river"></span> Río (normal)</div>
+        <div class="legend-item"><span class="legend-dot dot-normal-dam"></span> Embalse (normal)</div>
+        <div class="legend-item"><span class="legend-dot dot-nodata"></span> Inactiva / Sin registro</div>
+        <div class="legend-item"><span class="legend-dot dot-preventiva"></span> Alerta azul / preventiva</div>
+        <div class="legend-item"><span class="legend-dot dot-alert"></span> Advertencia / amarilla</div>
+        <div class="legend-item"><span class="legend-dot dot-critical"></span> Crítica / roja</div>
+      </div>
+    </section>
+
+    <aside class="sidebar-panel">
+      <div class="panel-tabs" role="tablist">
+        <button class="tab-btn active" type="button" role="tab" data-tab="tab-alertas">
+          <i class="fa-solid fa-triangle-exclamation"></i> Alertas (<span id="alert-counter">0</span>)
+        </button>
+        <button class="tab-btn" type="button" role="tab" data-tab="tab-estaciones">
+          <i class="fa-solid fa-list-check"></i> Monitoreo
+        </button>
+      </div>
+
+      <div id="tab-alertas" class="tab-content active" role="tabpanel">
+        <div class="tab-header">
+          <h3>Alertas activas</h3>
+          <span class="badge badge-info" title="Alertas oficiales DGA en tiempo real + umbrales personalizados">DGA + usuario</span>
+        </div>
+        <div id="alertas-list" class="alertas-container">
+          <div class="empty-state"><i class="fa-solid fa-shield-halved"></i><p>Cargando alertas...</p></div>
+        </div>
+      </div>
+
+      <div id="tab-estaciones" class="tab-content" role="tabpanel">
+        <div class="tab-header">
+          <h3>Estaciones y embalses</h3>
+          <span id="filtered-count" class="badge">--</span>
+        </div>
+        <div id="station-list" class="station-list-container"></div>
+      </div>
+    </aside>
+  </main>
+
+  <div id="modal-station" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-nombre">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <span id="modal-badge-tipo" class="badge badge-info">Tipo</span>
+          <h2 id="modal-nombre">Estación</h2>
+          <span id="modal-codigo" class="modal-sub">Código: --</span>
+        </div>
+        <button id="modal-close" class="btn-close" type="button" aria-label="Cerrar">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="modal-metrics-grid">
+          <div class="metric-box">
+            <div class="metric-title" id="lbl-val-1">--</div>
+            <div class="metric-num" id="val-met-1">--</div>
+            <div class="metric-unit" id="unit-met-1"></div>
+          </div>
+          <div class="metric-box">
+            <div class="metric-title" id="lbl-val-2">--</div>
+            <div class="metric-num" id="val-met-2">--</div>
+            <div class="metric-unit" id="unit-met-2"></div>
+          </div>
+          <div class="metric-box">
+            <div class="metric-title">Estado</div>
+            <div class="metric-num" id="val-estado">--</div>
+            <div class="metric-unit" id="val-subestado"></div>
+          </div>
+        </div>
+
+        <div id="modal-stale" class="info-banner hidden">
+          <i class="fa-solid fa-clock"></i> <span id="modal-stale-texto"></span>
+        </div>
+        <div id="modal-alerta-banner" class="alert-banner hidden">
+          <i class="fa-solid fa-triangle-exclamation"></i> <span id="modal-alerta-texto"></span>
+        </div>
+
+        <div class="threshold-form-box">
+          <h4><i class="fa-solid fa-sliders"></i> Umbrales personalizados</h4>
+          <p class="form-desc" id="form-desc">Deja ambos campos vacíos para eliminar la regla.</p>
+
+          <form id="form-threshold" novalidate>
+            <input type="hidden" id="form-tipo">
+            <input type="hidden" id="form-codigo">
+            <input type="hidden" id="form-nombre">
+            <div class="form-row">
+              <div class="form-field">
+                <label for="input-thresh-min" id="lbl-thresh-min">Umbral mínimo:</label>
+                <div class="input-with-unit">
+                  <input type="number" step="0.01" min="0" max="1000000" id="input-thresh-min">
+                  <span class="unit-addon" id="unit-addon-min"></span>
+                </div>
+              </div>
+              <div class="form-field">
+                <label for="input-thresh-max" id="lbl-thresh-max">Umbral máximo:</label>
+                <div class="input-with-unit">
+                  <input type="number" step="0.01" min="0" max="1000000" id="input-thresh-max">
+                  <span class="unit-addon" id="unit-addon-max"></span>
+                </div>
+              </div>
+            </div>
+            <div class="form-actions">
+              <span id="save-feedback" class="feedback-msg" role="status"></span>
+              <button type="submit" class="btn btn-primary" id="btn-save"><i class="fa-solid fa-floppy-disk"></i> Guardar</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js', v='4') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='14') }}"></script>
+</body>
+</html>
