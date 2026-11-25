@@ -7,5 +7,6 @@ venv/
 data/.csrf_token
 data/cache.json
 data/alerts_history.json
+data/rivers_cache.json
 data/*.bak
 data/.tmp_*.json

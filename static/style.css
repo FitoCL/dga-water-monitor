@@ -3093,3 +3093,355 @@ body {
     display: none;
   }
 }
+
+/* ==========================================================================
+   ALERT RIVER REACH HIGHLIGHT (CRÍTICA, ADVERTENCIA Y PREVENTIVA)
+   ========================================================================== */
+.river-critical-glow {
+  stroke: #ff1a40;
+  stroke-opacity: 0.4;
+  filter: drop-shadow(0 0 5px rgba(255, 26, 64, 0.85)) drop-shadow(0 0 10px rgba(255, 26, 64, 0.45));
+  pointer-events: none;
+  animation: riverGlowPulse 2s ease-in-out infinite alternate;
+}
+
+.river-critical-core {
+  stroke: #ff3358;
+  stroke-dasharray: 8, 5;
+  animation: riverFlowAnim 1.1s linear infinite;
+  cursor: pointer;
+}
+
+.river-advertencia-glow {
+  stroke: #f59e0b;
+  stroke-opacity: 0.36;
+  filter: drop-shadow(0 0 4px rgba(245, 158, 11, 0.8)) drop-shadow(0 0 9px rgba(245, 158, 11, 0.4));
+  pointer-events: none;
+  animation: riverWarnGlowPulse 2.4s ease-in-out infinite alternate;
+}
+
+.river-advertencia-core {
+  stroke: #fbbf24;
+  stroke-dasharray: 8, 5;
+  animation: riverFlowAnim 1.35s linear infinite;
+  cursor: pointer;
+}
+
+.river-preventiva-glow {
+  stroke: #0ea5e9;
+  stroke-opacity: 0.34;
+  filter: drop-shadow(0 0 4px rgba(56, 189, 248, 0.75)) drop-shadow(0 0 8px rgba(14, 165, 233, 0.38));
+  pointer-events: none;
+  animation: riverPrevGlowPulse 2.8s ease-in-out infinite alternate;
+}
+
+.river-preventiva-core {
+  stroke: #38bdf8;
+  stroke-dasharray: 7, 5;
+  animation: riverFlowAnim 1.6s linear infinite;
+  cursor: pointer;
+}
+
+@keyframes riverFlowAnim {
+  from {
+    stroke-dashoffset: 26;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes riverGlowPulse {
+  0% {
+    stroke-opacity: 0.3;
+    stroke-width: 5;
+    filter: drop-shadow(0 0 4px rgba(255, 26, 64, 0.65));
+  }
+  100% {
+    stroke-opacity: 0.65;
+    stroke-width: 7.5;
+    filter: drop-shadow(0 0 8px rgba(255, 26, 64, 0.95)) drop-shadow(0 0 14px rgba(255, 50, 80, 0.6));
+  }
+}
+
+@keyframes riverWarnGlowPulse {
+  0% {
+    stroke-opacity: 0.28;
+    stroke-width: 4.5;
+    filter: drop-shadow(0 0 3px rgba(245, 158, 11, 0.6));
+  }
+  100% {
+    stroke-opacity: 0.56;
+    stroke-width: 6.5;
+    filter: drop-shadow(0 0 7px rgba(245, 158, 11, 0.9)) drop-shadow(0 0 12px rgba(251, 191, 36, 0.5));
+  }
+}
+
+@keyframes riverPrevGlowPulse {
+  0% {
+    stroke-opacity: 0.25;
+    stroke-width: 4;
+    filter: drop-shadow(0 0 3px rgba(56, 189, 248, 0.55));
+  }
+  100% {
+    stroke-opacity: 0.52;
+    stroke-width: 6;
+    filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.85)) drop-shadow(0 0 11px rgba(14, 165, 233, 0.45));
+  }
+}
+
+/* HALO ONDULANTE EN ESTACIÓN EN ALERTA */
+.critical-station-wave,
+.alert-station-wave {
+  position: relative;
+  width: 50px;
+  height: 50px;
+  pointer-events: none;
+}
+
+.critical-station-wave::before,
+.critical-station-wave::after,
+.alert-station-wave::before,
+.alert-station-wave::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 100%;
+  height: 100%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px solid rgba(255, 42, 85, 0.9);
+  background: radial-gradient(circle, rgba(255, 42, 85, 0.35) 0%, rgba(255, 42, 85, 0) 70%);
+  animation: critWaveExpand 2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+
+.alert-wave-advertencia::before,
+.alert-wave-advertencia::after {
+  border-color: rgba(245, 158, 11, 0.88);
+  background: radial-gradient(circle, rgba(245, 158, 11, 0.32) 0%, rgba(245, 158, 11, 0) 70%);
+  animation-duration: 2.4s;
+}
+
+.alert-wave-preventiva::before,
+.alert-wave-preventiva::after {
+  border-color: rgba(56, 189, 248, 0.85);
+  background: radial-gradient(circle, rgba(56, 189, 248, 0.28) 0%, rgba(56, 189, 248, 0) 70%);
+  animation-duration: 2.8s;
+}
+
+.critical-station-wave::after,
+.alert-station-wave::after {
+  animation-delay: 1s;
+}
+
+@keyframes critWaveExpand {
+  0% {
+    width: 16px;
+    height: 16px;
+    opacity: 1;
+    border-width: 3px;
+  }
+  100% {
+    width: 68px;
+    height: 68px;
+    opacity: 0;
+    border-width: 1px;
+  }
+}
+
+/* BADGE FLOTANTE DE TRAMO EN ALERTA */
+.river-critical-tooltip {
+  background: rgba(15, 23, 42, 0.94) !important;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 59, 92, 0.6) !important;
+  box-shadow: 0 4px 20px rgba(255, 42, 85, 0.4), inset 0 0 12px rgba(255, 42, 85, 0.15) !important;
+  color: #fff !important;
+  font-size: 0.76rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.03em !important;
+  padding: 4px 10px !important;
+  border-radius: 6px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  white-space: nowrap !important;
+}
+
+.river-critical-tooltip.river-advertencia-tooltip {
+  border-color: rgba(245, 158, 11, 0.65) !important;
+  box-shadow: 0 4px 20px rgba(245, 158, 11, 0.35), inset 0 0 12px rgba(245, 158, 11, 0.14) !important;
+}
+
+.river-critical-tooltip.river-preventiva-tooltip {
+  border-color: rgba(56, 189, 248, 0.65) !important;
+  box-shadow: 0 4px 20px rgba(56, 189, 248, 0.32), inset 0 0 12px rgba(56, 189, 248, 0.14) !important;
+}
+
+.river-critical-tooltip::before {
+  border-top-color: rgba(255, 59, 92, 0.8) !important;
+}
+
+.river-critical-tooltip i {
+  color: #ff3b5c;
+  animation: badgeBlink 1s infinite alternate;
+}
+
+.river-critical-tooltip.river-advertencia-tooltip i {
+  color: #fbbf24;
+}
+
+.river-critical-tooltip.river-preventiva-tooltip i {
+  color: #38bdf8;
+}
+
+@keyframes badgeBlink {
+  from { opacity: 0.6; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1.15); }
+}
+
+/* ==========================================================================
+   SOUND GALLERY POPOVER (GALERÍA DE SONIDOS DE ALERTA)
+   ========================================================================== */
+.sound-control-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.btn-sound-gallery {
+  padding: 8px 9px;
+  font-size: 0.78rem;
+}
+
+.btn-sound-gallery[aria-expanded="true"] {
+  color: var(--accent-cyan);
+  border-color: rgba(56, 189, 248, 0.5);
+  background-color: rgba(14, 165, 233, 0.14);
+}
+
+.sound-gallery-popover {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: 318px;
+  background: rgba(12, 18, 32, 0.96);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 12px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  padding: 12px;
+  z-index: 2600;
+}
+
+.sound-gallery-popover.hidden {
+  display: none;
+}
+
+.sound-gallery-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 8px;
+  margin-bottom: 9px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.02em;
+}
+
+.sound-gallery-header i {
+  color: var(--accent-cyan);
+  margin-right: 5px;
+}
+
+.sound-gallery-header small {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.sound-gallery-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sound-gallery-row {
+  display: grid;
+  grid-template-columns: 92px 1fr 30px;
+  align-items: center;
+  gap: 7px;
+}
+
+.sound-level-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.sound-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.sound-level-tag.critico { color: #fda4af; }
+.sound-level-tag.critico .sound-dot { background: #ef4444; box-shadow: 0 0 8px rgba(239, 68, 68, 0.75); }
+
+.sound-level-tag.advertencia { color: #fcd34d; }
+.sound-level-tag.advertencia .sound-dot { background: #f59e0b; box-shadow: 0 0 8px rgba(245, 158, 11, 0.75); }
+
+.sound-level-tag.preventiva { color: #7dd3fc; }
+.sound-level-tag.preventiva .sound-dot { background: #38bdf8; box-shadow: 0 0 8px rgba(56, 189, 248, 0.75); }
+
+.sound-preset-select {
+  width: 100%;
+  background: rgba(30, 41, 59, 0.92);
+  color: var(--text-primary);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  padding: 5px 8px;
+  font-size: 0.74rem;
+  outline: none;
+  cursor: pointer;
+}
+
+.sound-preset-select:focus {
+  border-color: var(--accent-cyan);
+}
+
+.btn-sound-test {
+  width: 30px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  color: var(--accent-cyan);
+  cursor: pointer;
+  font-size: 0.7rem;
+  transition: transform 0.15s, background-color 0.15s;
+}
+
+.btn-sound-test:hover {
+  background: rgba(56, 189, 248, 0.24);
+  transform: scale(1.05);
+}
+
+.btn-sound-test.playing {
+  background: rgba(16, 185, 129, 0.22);
+  border-color: rgba(16, 185, 129, 0.55);
+  color: #34d399;
+}

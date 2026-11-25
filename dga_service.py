@@ -25,6 +25,7 @@ import shutil
 import tempfile
 import threading
 import time
+import unicodedata
 import zipfile
 from datetime import datetime, timedelta, timezone
 
@@ -39,12 +40,15 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 CONFIG_PATH = os.path.join(DATA_DIR, "alerts_config.json")
 CACHE_PATH = os.path.join(DATA_DIR, "cache.json")
 HISTORY_PATH = os.path.join(DATA_DIR, "alerts_history.json")
+RIVERS_CACHE_PATH = os.path.join(DATA_DIR, "rivers_cache.json")
 HISTORY_VERSION = 1
+RIVERS_CACHE_VERSION = 1
 HISTORY_RETENTION_DAYS = 30
 MAX_HISTORY_POINTS_PER_STATION = 3000
 
 MAPAS2_URL = "https://mapas2.mop.gob.cl"
 ARCGIS_DGA = "https://rest-sit.mop.gob.cl/arcgis/rest/services/DGA"
+ARCGIS_RED_HIDROGRAFICA = "https://rest-sit.mop.gob.cl/arcgis/rest/services/MAPA_BASE/RED_HIDROGRAFICA/MapServer/16/query"
 
 CACHE_VERSION = 4
 ARCGIS_TIMEOUT = (5, 12)                # (conexión, lectura) en segundos
@@ -83,6 +87,71 @@ DEFAULT_CONFIG = {
 def base_code(code):
     """'05710001-K' -> '05710001'."""
     return str(code or "").split("-")[0].strip()
+
+
+def _norm_text(s):
+    """Normaliza texto eliminando tildes y mayúsculas para comparar nombres de ríos."""
+    txt = unicodedata.normalize("NFKD", str(s or ""))
+    txt = "".join(c for c in txt if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", txt).lower().strip()
+
+
+def _extract_river_name(station_name):
+    """Extrae el nombre base del río o estero desde el nombre completo de una estación."""
+    clean = re.sub(r"\s+", " ", str(station_name or "")).strip()
+    if not clean:
+        return ""
+    parts = re.split(r"\s+(?:en|antes|despues|después|bajo|aguas|junta|desague|desagüe|sobre)\s+", clean, maxsplit=1, flags=re.IGNORECASE)
+    return (parts[0] or clean).strip()
+
+
+def _stitch_paths(raw_paths, tol=0.0005):
+    """Une segmentos contiguos [lat, lng] de ArcGIS en polilíneas continuas."""
+    paths = [
+        [[round(float(pt[1]), 5), round(float(pt[0]), 5)] for pt in path if len(pt) >= 2]
+        for path in raw_paths
+        if len(path) >= 2
+    ]
+    if not paths:
+        return []
+    stitched = []
+    used = [False] * len(paths)
+    for i in range(len(paths)):
+        if used[i]:
+            continue
+        used[i] = True
+        cur = list(paths[i])
+        changed = True
+        while changed:
+            changed = False
+            for j in range(len(paths)):
+                if used[j]:
+                    continue
+                pj = paths[j]
+                if math.hypot(cur[-1][0] - pj[0][0], cur[-1][1] - pj[0][1]) <= tol:
+                    cur.extend(pj[1:])
+                    used[j] = True
+                    changed = True
+                elif math.hypot(cur[-1][0] - pj[-1][0], cur[-1][1] - pj[-1][1]) <= tol:
+                    cur.extend(reversed(pj[:-1]))
+                    used[j] = True
+                    changed = True
+                elif math.hypot(cur[0][0] - pj[-1][0], cur[0][1] - pj[-1][1]) <= tol:
+                    cur = list(pj[:-1]) + cur
+                    used[j] = True
+                    changed = True
+                elif math.hypot(cur[0][0] - pj[0][0], cur[0][1] - pj[0][1]) <= tol:
+                    cur = list(reversed(pj[1:])) + cur
+                    used[j] = True
+                    changed = True
+        if len(cur) >= 2:
+            thinned = [cur[0]]
+            for pt in cur[1:-1]:
+                if math.hypot(pt[0] - thinned[-1][0], pt[1] - thinned[-1][1]) >= 0.0002:
+                    thinned.append(pt)
+            thinned.append(cur[-1])
+            stitched.append(thinned)
+    return stitched
 
 
 def now():
@@ -145,21 +214,35 @@ def finite_number(value, lo=0.0, hi=1_000_000.0):
     return round(v, 3)
 
 
+_FILE_WRITE_LOCK = threading.Lock()
+
+
 def atomic_write_json(path, data, keep_backup=False):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".tmp_", suffix=".json")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-            f.flush()
-            os.fsync(f.fileno())
-        if keep_backup and os.path.exists(path):
-            shutil.copy2(path, path + ".bak")
-        os.replace(tmp, path)
-    except Exception:
-        if os.path.exists(tmp):
-            os.remove(tmp)
-        raise
+    with _FILE_WRITE_LOCK:
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".tmp_", suffix=".json")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            if keep_backup and os.path.exists(path):
+                shutil.copy2(path, path + ".bak")
+            for attempt in range(5):
+                try:
+                    os.replace(tmp, path)
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.04 * (attempt + 1))
+        except Exception:
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+            raise
 
 
 def load_json(path):
@@ -227,6 +310,7 @@ class DGAService:
         self.cache = self._load_cache()
         self.config = self._load_config()
         self.history = self._load_history()
+        self.rivers_cache = self._load_rivers_cache()
         self._alertas = []
         self._estado_por_codigo = {}
         self.recompute_alerts()
@@ -313,6 +397,26 @@ class DGAService:
             atomic_write_json(HISTORY_PATH, snapshot)
         except Exception as e:
             log.error("No se pudo guardar alerts_history.json: %s", e)
+
+    def _load_rivers_cache(self):
+        empty = {"version": RIVERS_CACHE_VERSION, "rivers": {}}
+        if not os.path.exists(RIVERS_CACHE_PATH):
+            return empty
+        try:
+            raw = load_json(RIVERS_CACHE_PATH)
+            if isinstance(raw, dict) and raw.get("version") == RIVERS_CACHE_VERSION and isinstance(raw.get("rivers"), dict):
+                return raw
+        except Exception as e:
+            log.warning("rivers_cache.json corrupto, se regenerará: %s", e)
+        return empty
+
+    def _save_rivers_cache(self):
+        with self._lock:
+            snapshot = json.loads(json.dumps(self.rivers_cache))
+        try:
+            atomic_write_json(RIVERS_CACHE_PATH, snapshot)
+        except Exception as e:
+            log.error("No se pudo guardar rivers_cache.json: %s", e)
 
     # ------------------------------------------------------------------ mapas2 (CSRF)
     def _refresh_csrf(self):
@@ -549,6 +653,7 @@ class DGAService:
 
     def ensure_all_regions(self):
         def load_caudales_all():
+            updated = False
             for reg in REGIONES:
                 if self._stop.is_set():
                     return
@@ -557,10 +662,15 @@ class DGAService:
                 if not cau or is_stale(cau.get("updated"), CAUDAL_TTL):
                     try:
                         self.fetch_caudales_region(reg)
+                        updated = True
+                        self.recompute_alerts()
                         self._save_cache()
                     except Exception as e:
                         log.warning("Caudal región %s: %s", reg, e)
                     time.sleep(0.8)
+            if updated:
+                self.recompute_alerts()
+                self._save_cache()
 
         def load_all():
             updated = False
@@ -581,49 +691,55 @@ class DGAService:
             self._run_bg("all-caudales", load_caudales_all)
         self._run_bg("all-regions", load_all)
 
+    def _sync_arcgis_sources(self, force_embalses=False):
+        """Sincroniza alertas oficiales y embalses DGA sin ocultar fallos reales de red."""
+        errors = []
+        arcgis_ok = True
+        try:
+            self.fetch_alertas_oficiales()
+        except ArcGISUnavailableError as e:
+            arcgis_ok = False
+            with self._lock:
+                cached_alerts = len(self.cache.get("alertas_oficiales") or [])
+            log.warning("ArcGIS ALERTAS no disponible (%s); usando %d alertas en caché.", e, cached_alerts)
+            errors.append(str(e))
+        except Exception as e:
+            arcgis_ok = False
+            log.warning("Error sincronizando alertas oficiales: %s", e)
+            errors.append(f"alertas oficiales: {e}")
+
+        with self._lock:
+            emb_stale = force_embalses or is_stale(self.cache.get("embalses_updated"), EMBALSE_TTL) or not self.cache.get("embalses")
+        if arcgis_ok and emb_stale:
+            try:
+                self.fetch_embalses()
+            except ArcGISUnavailableError as e:
+                with self._lock:
+                    cached_emb = len(self.cache.get("embalses") or [])
+                log.warning("ArcGIS EMBALSES no disponible (%s); usando %d embalses en caché.", e, cached_emb)
+                errors.append(str(e))
+            except Exception as e:
+                log.warning("Error sincronizando embalses: %s", e)
+                errors.append(f"embalses: {e}")
+        return arcgis_ok, errors
+
     def sync_realtime(self, force_embalses=False):
         """Sincronización ligera (< 2s) de alertas oficiales DGA y embalses."""
         if not self._sync_lock.acquire(blocking=False):
             return False
-        errors = []
         try:
             self._last_realtime_attempt = time.time()
-            arcgis_ok = True
-            try:
-                self.fetch_alertas_oficiales()
-            except ArcGISUnavailableError as e:
-                arcgis_ok = False
-                with self._lock:
-                    cached_alerts = len(self.cache.get("alertas_oficiales") or [])
-                if cached_alerts:
-                    log.info("ArcGIS ALERTAS en mantenimiento (%s); usando %d alertas en caché.", e, cached_alerts)
-                else:
-                    errors.append(str(e))
-            except Exception as e:
-                errors.append(f"alertas oficiales: {e}")
-
+            arcgis_ok, errors = self._sync_arcgis_sources(force_embalses=force_embalses)
             with self._lock:
-                emb_stale = force_embalses or is_stale(self.cache.get("embalses_updated"), EMBALSE_TTL) or not self.cache.get("embalses")
-            if arcgis_ok and emb_stale:
-                try:
-                    self.fetch_embalses()
-                except ArcGISUnavailableError as e:
-                    with self._lock:
-                        cached_emb = len(self.cache.get("embalses") or [])
-                    if cached_emb:
-                        log.info("ArcGIS EMBALSES en mantenimiento (%s); usando %d embalses en caché.", e, cached_emb)
-                    else:
-                        errors.append(str(e))
-                except Exception as e:
-                    errors.append(f"embalses: {e}")
-
-            with self._lock:
-                self.cache["last_sync"] = iso(now())
+                if arcgis_ok:
+                    self.cache["last_sync"] = iso(now())
                 self.cache["last_error"] = "; ".join(errors)[:500] if errors else None
             self.recompute_alerts()
             self._save_cache()
+            if arcgis_ok:
+                self._run_bg("rivers", self.ensure_critical_river_geometries)
             log.info("Sincronización en vivo completa%s", f" con errores: {errors}" if errors else "")
-            return True
+            return arcgis_ok
         finally:
             self._sync_lock.release()
 
@@ -633,48 +749,22 @@ class DGAService:
         if stale and (time.time() - self._last_realtime_attempt > 15):
             self._run_bg("realtime", self.sync_realtime)
 
-    def sync_all(self, target_region=None):
+    def sync_all(self, target_region=None, force_region=False):
         if not self._sync_lock.acquire(blocking=False):
             return False
-        errors = []
         try:
             self._last_realtime_attempt = time.time()
-            arcgis_ok = True
-            try:
-                self.fetch_alertas_oficiales()
-            except ArcGISUnavailableError as e:
-                arcgis_ok = False
-                with self._lock:
-                    cached_alerts = len(self.cache.get("alertas_oficiales") or [])
-                if cached_alerts:
-                    log.info("ArcGIS ALERTAS en mantenimiento (%s); usando %d alertas en caché.", e, cached_alerts)
-                else:
-                    errors.append(str(e))
-            except Exception as e:
-                errors.append(f"alertas oficiales: {e}")
-
-            with self._lock:
-                emb_stale = is_stale(self.cache.get("embalses_updated"), EMBALSE_TTL) or not self.cache.get("embalses")
-            if arcgis_ok and emb_stale:
-                try:
-                    self.fetch_embalses()
-                except ArcGISUnavailableError as e:
-                    with self._lock:
-                        cached_emb = len(self.cache.get("embalses") or [])
-                    if cached_emb:
-                        log.info("ArcGIS EMBALSES en mantenimiento (%s); usando %d embalses en caché.", e, cached_emb)
-                    else:
-                        errors.append(str(e))
-                except Exception as e:
-                    errors.append(f"embalses: {e}")
+            arcgis_ok, errors = self._sync_arcgis_sources(force_embalses=force_region)
+            region_synced = False
 
             if target_region and target_region != "all" and target_region in REGIONES:
                 try:
                     self.fetch_estaciones_region(target_region)
                     with self._lock:
                         cau = self.cache["caudales_by_region"].get(target_region)
-                    if not cau or is_stale(cau.get("updated"), CAUDAL_TTL):
+                    if force_region or not cau or is_stale(cau.get("updated"), CAUDAL_TTL):
                         self.fetch_caudales_region(target_region)
+                    region_synced = True
                 except Exception as e:
                     errors.append(f"región {target_region}: {e}")
 
@@ -687,19 +777,24 @@ class DGAService:
                 try:
                     if not cat or is_stale(cat.get("updated"), CATALOG_TTL):
                         self.fetch_estaciones_region(reg)
+                        region_synced = True
                     if not cau or is_stale(cau.get("updated"), CAUDAL_TTL):
                         self.fetch_caudales_region(reg)
+                        region_synced = True
                         time.sleep(0.5)
                 except Exception as e:
                     errors.append(f"región {reg}: {e}")
 
             with self._lock:
-                self.cache["last_sync"] = iso(now())
+                if arcgis_ok or region_synced:
+                    self.cache["last_sync"] = iso(now())
                 self.cache["last_error"] = "; ".join(errors)[:500] if errors else None
             self.recompute_alerts()
             self._save_cache()
+            if arcgis_ok:
+                self._run_bg("rivers", self.ensure_critical_river_geometries)
             log.info("Sincronización completa%s", f" con errores: {errors}" if errors else "")
-            return True
+            return arcgis_ok or region_synced
         finally:
             self._sync_lock.release()
 
@@ -712,9 +807,10 @@ class DGAService:
             if self._sync_lock.locked():
                 return False, "Ya hay una sincronización en curso."
             self._last_sync_request = time.time()
-        with self._lock:                       # forzar refresco de embalses en sync manual
+        with self._lock:                       # forzar refresco de embalses y alertas en sync manual
             self.cache["embalses_updated"] = None
-        threading.Thread(target=self.sync_all, args=(region,), name="manual-sync", daemon=True).start()
+            self.cache["alertas_oficiales_updated"] = None
+        threading.Thread(target=self.sync_all, args=(region, True), name="manual-sync", daemon=True).start()
         return True, "Sincronización con la DGA iniciada."
 
     def start_scheduler(self, interval_s=60):
@@ -1042,6 +1138,179 @@ class DGAService:
             "total_stations": len(stations_out),
             "stations": stations_out,
         }
+
+    # ------------------------------------------------------------------ red hidrográfica MOP
+    def _river_bbox_and_key(self, station_code, station_name, lat, lng):
+        river_name = _extract_river_name(station_name)
+        norm_river = _norm_text(river_name)
+        _, est_meta = self._station_name(base_code(station_code))
+        region = str((est_meta or {}).get("region") or "0")
+
+        pts = [(float(lat), float(lng))]
+        with self._lock:
+            regs = [self.cache["estaciones_by_region"].get(region, {})] if region != "0" else list(self.cache["estaciones_by_region"].values())
+            for r in regs:
+                for st in r.get("items", []):
+                    slat, slng = st.get("lat"), st.get("lng")
+                    if slat is None or slng is None:
+                        continue
+                    if _norm_text(_extract_river_name(st.get("nombre"))) == norm_river:
+                        pts.append((float(slat), float(slng)))
+
+        min_lat = min(p[0] for p in pts) - 0.25
+        max_lat = max(p[0] for p in pts) + 0.25
+        min_lng = min(p[1] for p in pts) - 0.30
+        max_lng = max(p[1] for p in pts) + 0.30
+        if len(pts) == 1:
+            min_lat, max_lat = float(lat) - 0.40, float(lat) + 0.40
+            min_lng, max_lng = float(lng) - 0.45, float(lng) + 0.45
+
+        key = f"{region}:{norm_river}"
+        return key, river_name, norm_river, region, (min_lng, min_lat, max_lng, max_lat)
+
+    def fetch_river_geometry(self, river_name, norm_river, lat, lng, bbox):
+        """Consulta el trazado oficial del río en MAPA_BASE/RED_HIDROGRAFICA (1:250k)."""
+        tokens = [re.sub(r"[^a-zA-Z0-9]", "", t) for t in norm_river.split()]
+        tokens = [t for t in tokens if len(t) >= 3 and t not in ("rio", "estero", "quebrada", "arroyo", "canal", "lago", "laguna")]
+        kw = max(tokens, key=len) if tokens else ""
+
+        params_base = {
+            "geometry": f"{bbox[0]:.4f},{bbox[1]:.4f},{bbox[2]:.4f},{bbox[3]:.4f}",
+            "geometryType": "esriGeometryEnvelope",
+            "inSR": 4326,
+            "spatialRel": "esriSpatialRelIntersects",
+            "outFields": "OBJECTID,NOMBRE,region",
+            "outSR": 4326,
+            "f": "json",
+        }
+        feats = []
+        if kw:
+            p = {**params_base, "where": f"UPPER(NOMBRE) LIKE '%{kw.upper()}%'"}
+            r = self.session.get(ARCGIS_RED_HIDROGRAFICA, params=p, timeout=ARCGIS_TIMEOUT)
+            r.raise_for_status()
+            data = r.json()
+            feats = [f for f in (data.get("features") or []) if _norm_text((f.get("attributes") or {}).get("NOMBRE")) == norm_river]
+            if not feats:
+                feats = [f for f in (data.get("features") or []) if kw in _norm_text((f.get("attributes") or {}).get("NOMBRE"))]
+
+        if not feats:
+            tight = f"{lng - 0.10:.4f},{lat - 0.10:.4f},{lng + 0.10:.4f},{lat + 0.10:.4f}"
+            p = {**params_base, "geometry": tight}
+            r = self.session.get(ARCGIS_RED_HIDROGRAFICA, params=p, timeout=ARCGIS_TIMEOUT)
+            r.raise_for_status()
+            data = r.json()
+            best_name = None
+            best_dist = 1e9
+            all_feats = data.get("features") or []
+            for f in all_feats:
+                nm = _norm_text((f.get("attributes") or {}).get("NOMBRE"))
+                if not nm:
+                    continue
+                for path in ((f.get("geometry") or {}).get("paths") or []):
+                    for pt in path:
+                        if len(pt) >= 2:
+                            d = math.hypot(pt[1] - lat, pt[0] - lng)
+                            if d < best_dist:
+                                best_dist = d
+                                best_name = nm
+            if best_name and best_dist <= 0.025:
+                feats = [f for f in all_feats if _norm_text((f.get("attributes") or {}).get("NOMBRE")) == best_name]
+
+        raw_paths = []
+        official_name = river_name
+        for f in feats:
+            nm = (f.get("attributes") or {}).get("NOMBRE")
+            if nm:
+                official_name = str(nm).strip()
+            for path in ((f.get("geometry") or {}).get("paths") or []):
+                if len(path) >= 2:
+                    raw_paths.append(path)
+
+        stitched = _stitch_paths(raw_paths)
+        return official_name, stitched
+
+    def ensure_critical_river_geometries(self):
+        """Obtiene y cachea la geometría oficial de todos los ríos con alerta activa (Crítica, Advertencia, Preventiva)."""
+        with self._lock:
+            active_alerts = [
+                dict(a) for a in self._alertas
+                if a.get("nivel_alerta") in ("CRITICO", "ADVERTENCIA", "PREVENTIVA")
+                and a.get("tipo_elemento") == "estacion"
+                and a.get("lat") is not None and a.get("lng") is not None
+            ]
+        if not active_alerts:
+            return
+
+        dirty = False
+        for a in active_alerts:
+            key, river_name, norm_river, region, bbox = self._river_bbox_and_key(
+                a.get("codigo"), a.get("nombre"), a["lat"], a["lng"]
+            )
+            if not norm_river:
+                continue
+            with self._lock:
+                existing = (self.rivers_cache.get("rivers") or {}).get(key)
+            if existing and existing.get("paths"):
+                continue
+            if existing and not is_stale(existing.get("updated"), timedelta(hours=6)):
+                continue
+            try:
+                official_name, paths = self.fetch_river_geometry(river_name, norm_river, float(a["lat"]), float(a["lng"]), bbox)
+                with self._lock:
+                    self.rivers_cache.setdefault("rivers", {})[key] = {
+                        "river_name": river_name,
+                        "official_name": official_name,
+                        "region": region,
+                        "updated": iso(now()),
+                        "paths": paths,
+                    }
+                dirty = True
+                log.info("Geometría fluvial cacheada para %s (%d tramos)", official_name, len(paths))
+            except Exception as e:
+                log.info("No se pudo obtener geometría fluvial para %s: %s", river_name, e)
+        if dirty:
+            self._save_rivers_cache()
+
+    def get_critical_river_geometries(self):
+        with self._lock:
+            active_alerts = [
+                dict(a) for a in self._alertas
+                if a.get("nivel_alerta") in ("CRITICO", "ADVERTENCIA", "PREVENTIVA")
+                and a.get("tipo_elemento") == "estacion"
+                and a.get("lat") is not None and a.get("lng") is not None
+            ]
+            rivers_map = dict(self.rivers_cache.get("rivers") or {})
+
+        active_alerts.sort(key=lambda a: -SEVERITY.get(a.get("nivel_alerta"), 0))
+
+        out = []
+        missing = False
+        seen = set()
+        for a in active_alerts:
+            key, river_name, norm_river, region, _ = self._river_bbox_and_key(
+                a.get("codigo"), a.get("nombre"), a["lat"], a["lng"]
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            entry = rivers_map.get(key)
+            if entry and entry.get("paths"):
+                out.append({
+                    "key": key,
+                    "codigo": a.get("codigo"),
+                    "nivel_alerta": a.get("nivel_alerta"),
+                    "river_name": river_name,
+                    "official_name": entry.get("official_name") or river_name,
+                    "region": region,
+                    "paths": entry["paths"],
+                    "source": "MOP Red Hidrográfica 1:250k",
+                })
+            elif not entry or is_stale(entry.get("updated"), timedelta(hours=6)):
+                missing = True
+
+        if missing:
+            self._run_bg("rivers", self.ensure_critical_river_geometries)
+        return out
 
     # ------------------------------------------------------------------ lecturas para la API
     def get_alertas(self):

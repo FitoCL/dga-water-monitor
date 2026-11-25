@@ -21,7 +21,17 @@ Aplicación web de monitoreo hidrométrico y alertas en tiempo real para **ríos
 
 ---
 
-## Novedades recientes (`v2.0.0`)
+## Novedades recientes (`v3.0.0`)
+
+- **Trazado geográfico exacto de ríos en alerta (`MAPA_BASE/RED_HIDROGRAFICA` 1:250k):** Los ríos con alertas **Críticas (rojo)**, **Advertencias (ámbar)** y **Preventivas (azul/cian)** ahora se destacan directamente sobre el mapa siguiendo el cauce oficial del MOP con polilíneas animadas, halos pulsantes y tooltips interactivos (`/api/alertas/cauces` + caché local en `data/rivers_cache.json`).
+- **Galería de Sonidos de Alerta (Web Audio API):** Nuevo panel desplegable junto a la campana para elegir y probar tonos sintetizados diferenciados por severidad, incluyendo alarma crítica estilo **Sirena Nuclear / Klaxon Bunker / Alerta Geiger**, tonos ámbar de **Advertencia** y chimes suaves **Preventivos** (persistidos en `localStorage`).
+- **Segmentación regional y filtros consistentes:**
+  - Al seleccionar una región, las tarjetas KPI contabilizan exclusivamente las estaciones, embalses y alertas de esa región y el segmentador vuelve a **Todos** por defecto.
+  - Al filtrar por tarjetas de alerta en el mapa (`Críticas`, `Advertencias`, `Preventivas`), el mapa muestra exclusivamente ese nivel mientras el panel lateral conserva todas las alertas activas.
+  - La pestaña **Monitoreo** muestra solo las estaciones activas cuando el filtro **Ríos activos** está seleccionado.
+- **Auditoría de sincronización e integridad:** Corrección de `_sync_arcgis_sources()` para reflejar fallos reales de red sin sobrescribir `last_sync`, sincronización manual forzada de región/alertas y bloqueo seguro (`_FILE_WRITE_LOCK` + reintentos en `os.replace`) para evitar colisiones de escritura concurrente en Windows.
+
+### Cambios anteriores (`v2.0.0`)
 
 - **Rediseño completo Obsidian Geospatial Telemetry HUD:** Nueva estética oscura translúcida, barras laterales de estado por severidad, popups oscuros de Leaflet y atribución integrada.
 - **Registro histórico temporal por 30 días:** Persistencia atómica en `data/alerts_history.json` y endpoint `GET /api/alertas/historial` para alertas Críticas, Advertencias y Preventivas, con gráfico SVG interactivo, líneas de umbral y animación de agua tipo estanque en vista individual y comparativa (`24 h` por defecto).
@@ -36,9 +46,9 @@ Aplicación web de monitoreo hidrométrico y alertas en tiempo real para **ríos
 
 | Capa / Área | Tecnologías y herramientas | Uso en el proyecto |
 | --- | --- | --- |
-| **Backend** | **Python 3**, **Flask**, **Waitress** (WSGI) | Servidor web, API REST (`/api/summary`, `/api/estaciones`, `/api/embalses`, `/api/alertas`, `/api/alertas/historial`, `/api/umbrales`, `/api/sync`) y programación en segundo plano cada 60 s |
-| **Consumo de datos** | **Requests** (`urllib3` con reintentos y TLS `verify=True`), `csv`, `zipfile` | Integración con servicios ArcGIS REST del MOP (`DGA/ALERTAS`, `DGA/ESTACION_EMBALSE`) y catálogos/caudales por región (`mapas2.mop.gob.cl`) |
-| **Persistencia** | **JSON atómico** (`tempfile` + `os.replace`) | Caché de estaciones (`cache.json`), reglas de umbrales (`alerts_config.json`) e historial temporal de 30 días (`alerts_history.json`) |
+| **Backend** | **Python 3**, **Flask**, **Waitress** (WSGI) | Servidor web, API REST (`/api/summary`, `/api/estaciones`, `/api/embalses`, `/api/alertas`, `/api/alertas/cauces`, `/api/alertas/historial`, `/api/umbrales`, `/api/sync`) y programación en segundo plano cada 60 s |
+| **Consumo de datos** | **Requests** (`urllib3` con reintentos y TLS `verify=True`), `csv`, `zipfile` | Integración con servicios ArcGIS REST del MOP (`DGA/ALERTAS`, `DGA/ESTACION_EMBALSE`, `MAPA_BASE/RED_HIDROGRAFICA`) y catálogos/caudales por región (`mapas2.mop.gob.cl`) |
+| **Persistencia** | **JSON atómico** (`tempfile` + `_FILE_WRITE_LOCK` + `os.replace`) | Caché de estaciones (`cache.json`), geometría fluvial (`rivers_cache.json`), reglas de umbrales (`alerts_config.json`) e historial temporal de 30 días (`alerts_history.json`) |
 | **Frontend** | **HTML5**, **CSS3** (Custom Properties, Flexbox, Grid, Keyframes), **JavaScript Vanilla (ES6+)** | Interfaz Obsidian HUD responsiva, construcción segura del DOM sin `.innerHTML` y gráficos **SVG** interactivos con animación de olas |
 | **Mapas e iconos** | **Leaflet.js**, **Font Awesome** (servidos localmente) | Mapa interactivo con capas oscuras, topográficas y satelitales sin dependencias externas de CDN |
 | **APIs del navegador** | **Notification API**, **Web Audio API**, **Intl.DateTimeFormat** | Notificaciones de escritorio, alertas sonoras sintetizadas y reloj oficial de Chile (`America/Santiago`) |

@@ -10,7 +10,7 @@
   <!-- Librerías servidas localmente (sin dependencias de CDN de terceros) -->
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css', v='4') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fontawesome/css/all.min.css', v='4') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='33') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='37') }}">
 </head>
 <body>
   <header class="navbar">
@@ -37,9 +37,55 @@
         <span class="live-indicator"></span>
         <span id="sync-status">Conectando...</span>
       </div>
-      <button id="btn-sound" class="btn btn-icon active" type="button" title="Silenciar alertas" aria-pressed="true">
-        <i class="fa-solid fa-bell"></i>
-      </button>
+      <div class="sound-control-wrap" id="sound-control-wrap">
+        <button id="btn-sound" class="btn btn-icon active" type="button" title="Silenciar alertas" aria-pressed="true">
+          <i class="fa-solid fa-bell"></i>
+        </button>
+        <button id="btn-sound-gallery" class="btn btn-icon btn-sound-gallery" type="button" title="Galería y prueba de sonidos de alerta" aria-expanded="false" aria-controls="sound-gallery-popover">
+          <i class="fa-solid fa-sliders"></i>
+        </button>
+        <div id="sound-gallery-popover" class="sound-gallery-popover hidden" role="dialog" aria-label="Galería de sonidos de alerta">
+          <div class="sound-gallery-header">
+            <span><i class="fa-solid fa-volume-high"></i> Galería de Sonidos</span>
+            <small>Web Audio</small>
+          </div>
+          <div class="sound-gallery-list">
+            <div class="sound-gallery-row">
+              <span class="sound-level-tag critico"><span class="sound-dot"></span> Crítico</span>
+              <select class="sound-preset-select" data-sound-level="CRITICO" aria-label="Sonido para alerta crítica">
+                <option value="siren">Sirena Nuclear</option>
+                <option value="alarm">Klaxon Bunker</option>
+                <option value="radar">Alerta Geiger</option>
+              </select>
+              <button type="button" class="btn-sound-test" data-test-sound="CRITICO" title="Probar sonido crítico">
+                <i class="fa-solid fa-play"></i>
+              </button>
+            </div>
+            <div class="sound-gallery-row">
+              <span class="sound-level-tag advertencia"><span class="sound-dot"></span> Advertencia</span>
+              <select class="sound-preset-select" data-sound-level="ADVERTENCIA" aria-label="Sonido para alerta de advertencia">
+                <option value="amber_dual">Doble Tono Ámbar</option>
+                <option value="bell_warn">Campana Doble</option>
+                <option value="pulse_mid">Pulso Moderado</option>
+              </select>
+              <button type="button" class="btn-sound-test" data-test-sound="ADVERTENCIA" title="Probar sonido de advertencia">
+                <i class="fa-solid fa-play"></i>
+              </button>
+            </div>
+            <div class="sound-gallery-row">
+              <span class="sound-level-tag preventiva"><span class="sound-dot"></span> Preventiva</span>
+              <select class="sound-preset-select" data-sound-level="PREVENTIVA" aria-label="Sonido para alerta preventiva">
+                <option value="chime">Chime Suave</option>
+                <option value="crystal">Eco Cristal</option>
+                <option value="ping">Nota Única</option>
+              </select>
+              <button type="button" class="btn-sound-test" data-test-sound="PREVENTIVA" title="Probar sonido preventivo">
+                <i class="fa-solid fa-play"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
       <button id="btn-notify" class="btn btn-icon" type="button" title="Activar notificaciones del navegador" aria-pressed="false">
         <i class="fa-solid fa-tower-broadcast"></i>
       </button>
@@ -373,6 +419,6 @@
   </div>
 
   <script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js', v='4') }}"></script>
-  <script src="{{ url_for('static', filename='app.js', v='39') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='54') }}"></script>
 </body>
 </html>

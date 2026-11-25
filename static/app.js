@@ -38,6 +38,8 @@ const State = {
   historyLevel: 'ALL',
   historyStation: '__ALL__',
   historyData: null,
+  riverLayer: null,
+  criticalRivers: [],
 };
 
 const REGION_VIEW = {
@@ -55,6 +57,16 @@ const LEVEL_LABEL = {
 
 /* ----------------------------------------------------------------- utilidades */
 const $ = (id) => document.getElementById(id);
+
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -284,6 +296,7 @@ function initMap() {
     if (entry && select) select.value = entry[0];
   });
 
+  State.riverLayer = L.layerGroup().addTo(State.map);
   State.layer = L.layerGroup().addTo(State.map);
   setTimeout(() => State.map && State.map.invalidateSize(), 150);
   window.addEventListener('resize', () => State.map && State.map.invalidateSize());
@@ -316,7 +329,7 @@ function bindEvents() {
     const v = REGION_VIEW[State.region] || REGION_VIEW['13'];
     State.map.setView([v[0], v[1]], v[2]);
     State.estaciones = [];
-    render();
+    setFilter('all', false, false);
     refresh(true);
   });
 
@@ -403,6 +416,7 @@ function bindEvents() {
 
   $('btn-sync').addEventListener('click', forceSync);
   $('btn-sound').addEventListener('click', toggleSound);
+  initSoundGallery();
   $('btn-notify').addEventListener('click', toggleBrowserNotifications);
   $('btn-history').addEventListener('click', () => openHistoryModal());
   $('modal-close').addEventListener('click', closeModal);
@@ -413,6 +427,7 @@ function bindEvents() {
     if (e.key === 'Escape') {
       closeModal();
       closeHistoryModal();
+      closeSoundGallery();
     }
   });
   $('form-threshold').addEventListener('submit', saveThreshold);
@@ -485,12 +500,13 @@ async function refresh(showSpinner) {
   const seq = ++State.requestSeq;
   if (showSpinner) $('sync-spinner').classList.add('fa-spin');
   try {
-    const [summary, embalses, estaciones, alertas, umbrales] = await Promise.all([
+    const [summary, embalses, estaciones, alertas, umbrales, cauces] = await Promise.all([
       api('/api/summary'),
       api('/api/embalses'),
       api(`/api/estaciones?region=${encodeURIComponent(State.region)}`),
       api('/api/alertas'),
       api('/api/umbrales').catch(() => null),
+      api('/api/alertas/cauces').catch(() => []),
     ]);
     if (seq !== State.requestSeq) return;      // respuesta obsoleta (cambió la región)
 
@@ -498,6 +514,7 @@ async function refresh(showSpinner) {
     State.embalses = Array.isArray(embalses) ? embalses : [];
     State.estaciones = estList;
     State.alertas = Array.isArray(alertas) ? alertas : [];
+    State.criticalRivers = Array.isArray(cauces) ? cauces : [];
     if (umbrales && typeof umbrales === 'object') State.umbrales = umbrales;
     State.lastSummary = summary;
     State.loadingRegion = Boolean(estaciones && estaciones.cargando) || Boolean(summary.cargando);
@@ -533,19 +550,37 @@ function matchesSearch(item) {
     .some((v) => v && String(v).toLowerCase().includes(q));
 }
 
+function embalseMatchesRegion(emb) {
+  if (State.region === 'all') return true;
+  const reg = String(parseInt(String((emb && emb.codigo) || '').slice(0, 2), 10));
+  return reg === State.region;
+}
+
+function alertsInCurrentRegion(stationSet = null, embSet = null) {
+  if (State.region === 'all') return State.alertas;
+  const stCodes = stationSet || new Set(State.estaciones.map((e) => e.codigo));
+  const emCodes = embSet || new Set(State.embalses.filter(embalseMatchesRegion).map((e) => e.codigo));
+  return State.alertas.filter((a) => (a.tipo_elemento === 'embalse' ? emCodes.has(a.codigo) : stCodes.has(a.codigo)));
+}
+
 function updateDynamicKPIs(s) {
   const ests = State.estaciones.filter(matchesSearch);
-  const embs = State.embalses.filter(matchesSearch);
-  const alts = State.alertas.filter(matchesSearch);
+  const regionEmbs = State.embalses.filter(embalseMatchesRegion);
+  const embs = regionEmbs.filter(matchesSearch);
+  const regionAlts = alertsInCurrentRegion(
+    new Set(State.estaciones.map((e) => e.codigo)),
+    new Set(regionEmbs.map((e) => e.codigo))
+  );
+  const alts = regionAlts.filter(matchesSearch);
 
   const activasConDato = ests.filter((e) => e.activa !== false && !e.sin_registro).length;
   const inactivasCount = ests.filter((e) => e.activa === false).length;
   const sinRegCount = ests.filter((e) => e.activa !== false && e.sin_registro).length;
   const inactivasOSinReg = inactivasCount + sinRegCount;
 
-  const criticas = State.alertas.filter((a) => a.nivel_alerta === 'CRITICO').length;
-  const advertencias = State.alertas.filter((a) => a.nivel_alerta === 'ADVERTENCIA').length;
-  const preventivas = State.alertas.filter((a) => a.nivel_alerta === 'PREVENTIVA').length;
+  const criticas = regionAlts.filter((a) => a.nivel_alerta === 'CRITICO').length;
+  const advertencias = regionAlts.filter((a) => a.nivel_alerta === 'ADVERTENCIA').length;
+  const preventivas = regionAlts.filter((a) => a.nivel_alerta === 'PREVENTIVA').length;
 
   $('kpi-estaciones').textContent = activasConDato;
   $('kpi-estaciones-sub').textContent = `${ests.length} totales en vista`;
@@ -591,8 +626,9 @@ function setFilter(filter, fitMap = false, switchTab = false) {
     p.classList.toggle('active', p.dataset.filter === pillMatch);
   });
   if (switchTab) {
-    if (['criticas', 'advertencias', 'preventivas', 'alertas'].includes(State.filter)) activateSidebarTab('tab-alertas');
-    else if (['rios', 'inactivas', 'embalses'].includes(State.filter)) activateSidebarTab('tab-estaciones');
+    if (['criticas', 'advertencias', 'preventivas', 'alertas', 'rios', 'inactivas', 'embalses'].includes(State.filter)) {
+      activateSidebarTab('tab-alertas');
+    }
   }
   renderAlerts();
   const items = render();
@@ -641,6 +677,7 @@ function visibleItems() {
 
   if (searching || f === 'all' || f === 'embalses') {
     State.embalses.forEach((e) => {
+      if (!searching && !embalseMatchesRegion(e)) return;
       const lat = Number(e.lat), lng = Number(e.lng);
       if (validCoords(lat, lng)) push({ ...e, lat, lng, categoria: 'embalse' });
     });
@@ -662,6 +699,7 @@ function visibleItems() {
   if (searching || ALERT_FILTER_LEVELS[f]) {
     const targetLevels = searching ? null : ALERT_FILTER_LEVELS[f];
     State.embalses.forEach((e) => {
+      if (!searching && !embalseMatchesRegion(e)) return;
       const lat = Number(e.lat), lng = Number(e.lng);
       if (validCoords(lat, lng) && (!targetLevels || targetLevels.includes(e.estado))) push({ ...e, lat, lng, categoria: 'embalse' });
     });
@@ -669,7 +707,8 @@ function visibleItems() {
       const lat = Number(e.lat), lng = Number(e.lng);
       if (validCoords(lat, lng) && (!targetLevels || targetLevels.includes(e.estado))) push({ ...e, lat, lng, categoria: 'estacion' });
     });
-    State.alertas.forEach((a) => {
+    const alertSource = searching ? State.alertas : alertsInCurrentRegion();
+    alertSource.forEach((a) => {
       const lat = Number(a.lat), lng = Number(a.lng);
       if (validCoords(lat, lng) && (!targetLevels || targetLevels.includes(a.nivel_alerta))) push(alertAsMapItem(a));
     });
@@ -691,6 +730,32 @@ function visibleItems() {
   return filtered;
 }
 
+function allMonitorItems() {
+  const onlyActiveRivers = !State.search && State.filter === 'rios';
+  const items = [];
+  const seen = new Set();
+  const push = (item) => {
+    const key = `${item.categoria}:${item.codigo}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push(item);
+  };
+  if (!onlyActiveRivers) {
+    State.embalses.forEach((e) => {
+      if (!embalseMatchesRegion(e)) return;
+      const lat = Number(e.lat), lng = Number(e.lng);
+      if (validCoords(lat, lng)) push({ ...e, lat, lng, categoria: 'embalse' });
+    });
+  }
+  State.estaciones.forEach((e) => {
+    const lat = Number(e.lat), lng = Number(e.lng);
+    if (!validCoords(lat, lng)) return;
+    if (onlyActiveRivers && (e.activa === false || Boolean(e.sin_registro))) return;
+    push({ ...e, lat, lng, categoria: 'estacion' });
+  });
+  return items.filter(matchesSearch);
+}
+
 function render() {
   if (State.map) State.map.invalidateSize();
   State.layer.clearLayers();
@@ -701,7 +766,8 @@ function render() {
     m.addTo(State.layer);
     State.markers.set(`${item.categoria}:${item.codigo}`, m);
   });
-  renderList(items);
+  renderCriticalRiverReaches(items);
+  renderList(allMonitorItems());
   return items;
 }
 
@@ -724,6 +790,225 @@ function createMarker(item) {
   return marker;
 }
 const SEVERITY_Z = { CRITICO: 3000, ADVERTENCIA: 2000, PREVENTIVA: 1000 };
+
+/* ----------------------------------------------------------------- destacado de ríos en alerta crítica */
+function normRiverText(str) {
+  return String(str || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractRiverName(fullName) {
+  if (!fullName) return '';
+  const clean = String(fullName).trim();
+  const parts = clean.split(/\s+(?:en|antes|despues|después|bajo|aguas|junta|desague|desagüe|sobre)\s+/i);
+  return (parts[0] || clean).trim();
+}
+
+function orderStationsAlongRiver(points) {
+  if (points.length <= 2) return points;
+  const remaining = points.slice();
+  // Empezar desde la estación más alta válida (altitud > 0) o la más oriental (cordillera)
+  let startIdx = 0;
+  let bestScore = -Infinity;
+  remaining.forEach((p, idx) => {
+    const score = p.altitud > 0 ? p.altitud : (-10000 + p.lng * 100);
+    if (score > bestScore) {
+      bestScore = score;
+      startIdx = idx;
+    }
+  });
+  const ordered = [remaining.splice(startIdx, 1)[0]];
+  while (remaining.length > 0) {
+    const last = ordered[ordered.length - 1];
+    let bestIdx = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const d = haversineKm(last.lat, last.lng, remaining[i].lat, remaining[i].lng);
+      if (d < bestDist) {
+        bestDist = d;
+        bestIdx = i;
+      }
+    }
+    ordered.push(remaining.splice(bestIdx, 1)[0]);
+  }
+  return ordered;
+}
+
+const RIVER_ALERT_STYLE = {
+  CRITICO: {
+    label: 'Cauce en Alerta Roja',
+    icon: 'fa-triangle-exclamation',
+    glowColor: '#ff1a40',
+    glowWeight: 6,
+    glowOpacity: 0.42,
+    glowClass: 'river-critical-glow',
+    coreColor: '#ff3358',
+    coreWeight: 2.5,
+    coreClass: 'river-critical-core',
+    waveClass: 'critical-station-wave',
+    tooltipClass: '',
+    zOffset: 2500,
+  },
+  ADVERTENCIA: {
+    label: 'Cauce en Advertencia',
+    icon: 'fa-circle-exclamation',
+    glowColor: '#f59e0b',
+    glowWeight: 5.5,
+    glowOpacity: 0.36,
+    glowClass: 'river-advertencia-glow',
+    coreColor: '#fbbf24',
+    coreWeight: 2.3,
+    coreClass: 'river-advertencia-core',
+    waveClass: 'alert-station-wave alert-wave-advertencia',
+    tooltipClass: 'river-advertencia-tooltip',
+    zOffset: 2200,
+  },
+  PREVENTIVA: {
+    label: 'Cauce en Alerta Preventiva',
+    icon: 'fa-circle-info',
+    glowColor: '#0ea5e9',
+    glowWeight: 5,
+    glowOpacity: 0.34,
+    glowClass: 'river-preventiva-glow',
+    coreColor: '#38bdf8',
+    coreWeight: 2.2,
+    coreClass: 'river-preventiva-core',
+    waveClass: 'alert-station-wave alert-wave-preventiva',
+    tooltipClass: 'river-preventiva-tooltip',
+    zOffset: 1900,
+  },
+};
+
+function renderCriticalRiverReaches(visible = null) {
+  if (!State.map) return;
+  if (!State.riverLayer) {
+    State.riverLayer = L.layerGroup().addTo(State.map);
+  }
+  State.riverLayer.clearLayers();
+
+  if (State.filter === 'embalses' || State.filter === 'sin_datos' || State.filter === 'inactivas') return;
+
+  const sourceItems = Array.isArray(visible) ? visible : visibleItems();
+  const targetLevels = !State.search ? (ALERT_FILTER_LEVELS[State.filter] || null) : null;
+
+  // Mostrar únicamente los cauces y halos de las alertas visibles según el filtro activo
+  const alertItems = sourceItems
+    .filter((it) => RIVER_ALERT_STYLE[it.estado]
+      && (!targetLevels || targetLevels.includes(it.estado))
+      && validCoords(it.lat, it.lng))
+    .sort((a, b) => (SEVERITY_Z[b.estado] || 0) - (SEVERITY_Z[a.estado] || 0));
+
+  if (!alertItems.length) return;
+
+  const processedBasins = new Set();
+
+  alertItems.forEach((alertItem) => {
+    const estado = alertItem.estado;
+    const style = RIVER_ALERT_STYLE[estado];
+    const lat = Number(alertItem.lat);
+    const lng = Number(alertItem.lng);
+
+    // 1. Agregar halo/onda expansiva en la estación con alerta
+    const waveIcon = L.divIcon({
+      html: `<div class="${style.waveClass}"></div>`,
+      className: 'critical-wave-icon',
+      iconSize: [50, 50],
+      iconAnchor: [25, 25],
+    });
+    L.marker([lat, lng], { icon: waveIcon, interactive: false, zIndexOffset: style.zOffset }).addTo(State.riverLayer);
+
+    if (alertItem.categoria === 'embalse') return;
+
+    // 2. Extraer el nombre del río/cuenca y región (el mayor nivel de alerta prevalece por río)
+    const riverName = extractRiverName(alertItem.nombre);
+    const normRiver = normRiverText(riverName);
+    const basinKey = `${alertItem.region || '0'}:${normRiver}`;
+    if (processedBasins.has(basinKey)) return;
+    processedBasins.add(basinKey);
+
+    // 3. Buscar trazado geométrico oficial MOP (Red Hidrográfica 1:250k)
+    const official = (State.criticalRivers || []).find((r) => (
+      r.codigo === alertItem.codigo
+      || (normRiverText(r.river_name) === normRiver && (!alertItem.region || !r.region || r.region === alertItem.region))
+    ));
+
+    let latlngs = null;
+    let displayRiverName = riverName;
+    let tooltipDetail = '';
+
+    if (official && Array.isArray(official.paths) && official.paths.length > 0) {
+      latlngs = official.paths;
+      displayRiverName = official.official_name || riverName;
+      tooltipDetail = official.source ? `(${official.source})` : '(Red Hidrográfica MOP)';
+    } else {
+      // Fallback: encadenar estaciones del mismo cauce por cercanía espacial
+      const basinStations = (State.estaciones || []).filter((st) => {
+        if (!validCoords(st.lat, st.lng)) return false;
+        if (st.region && alertItem.region && st.region !== alertItem.region) return false;
+        return normRiverText(extractRiverName(st.nombre)) === normRiver;
+      });
+      if (basinStations.length >= 2) {
+        const ordered = orderStationsAlongRiver(basinStations.map((st) => ({
+          lat: Number(st.lat),
+          lng: Number(st.lng),
+          nombre: st.nombre,
+          altitud: Number(st.altitud) || 0,
+        })));
+        latlngs = ordered.map((p) => [p.lat, p.lng]);
+        tooltipDetail = `(${ordered.length} puntos de monitoreo)`;
+      }
+    }
+
+    if (latlngs && latlngs.length > 0) {
+      // Línea exterior fina con resplandor acorde al nivel de alerta
+      const glowLine = L.polyline(latlngs, {
+        color: style.glowColor,
+        weight: style.glowWeight,
+        opacity: style.glowOpacity,
+        className: style.glowClass,
+        lineCap: 'round',
+        lineJoin: 'round',
+        interactive: false,
+      });
+      glowLine.addTo(State.riverLayer);
+
+      // Línea central fina animada siguiendo el cauce exacto
+      const coreLine = L.polyline(latlngs, {
+        color: style.coreColor,
+        weight: style.coreWeight,
+        opacity: 0.95,
+        className: style.coreClass,
+        lineCap: 'round',
+        lineJoin: 'round',
+      });
+
+      const tooltipNode = el('div', { class: `river-critical-tooltip ${style.tooltipClass}`.trim() },
+        icon(`fa-solid ${style.icon}`),
+        el('span', {},
+          `${style.label}: `,
+          el('strong', { text: displayRiverName }),
+          tooltipDetail ? ` ${tooltipDetail}` : ''));
+
+      coreLine.bindTooltip(tooltipNode, {
+        sticky: true,
+        direction: 'top',
+        offset: [0, -6],
+        className: 'river-critical-leaflet-tooltip',
+      });
+
+      coreLine.on('click', () => {
+        State.map.fitBounds(coreLine.getBounds(), { padding: [55, 55], maxZoom: 14 });
+      });
+
+      coreLine.addTo(State.riverLayer);
+    }
+  });
+}
+
 
 function haversineKm(lat1, lng1, lat2, lng2) {
   const rad = Math.PI / 180;
@@ -1007,19 +1292,16 @@ function parseAlertTimestamp(fechaStr) {
 function renderAlerts() {
   const box = $('alertas-list');
   box.replaceChildren();
-  const targetLevels = ALERT_FILTER_LEVELS[State.filter] || null;
-  const list = State.alertas
-    .filter((a) => !targetLevels || targetLevels.includes(a.nivel_alerta))
-    .sort((a, b) => {
-      const sevDiff = (ALERT_SEVERITY[b.nivel_alerta] || 0) - (ALERT_SEVERITY[a.nivel_alerta] || 0);
-      if (sevDiff !== 0) return sevDiff;
-      const timeDiff = parseAlertTimestamp(b.fecha) - parseAlertTimestamp(a.fecha);
-      if (timeDiff !== 0) return timeDiff;
-      return String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es');
-    });
+  const list = [...State.alertas].sort((a, b) => {
+    const sevDiff = (ALERT_SEVERITY[b.nivel_alerta] || 0) - (ALERT_SEVERITY[a.nivel_alerta] || 0);
+    if (sevDiff !== 0) return sevDiff;
+    const timeDiff = parseAlertTimestamp(b.fecha) - parseAlertTimestamp(a.fecha);
+    if (timeDiff !== 0) return timeDiff;
+    return String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es');
+  });
   if (list.length === 0) {
     box.append(el('div', { class: 'empty-state' }, icon('fa-solid fa-circle-check ok-icon'),
-      el('p', { text: State.alertas.length === 0 ? 'No hay alertas activas. Todas las estaciones monitoreadas están dentro de sus umbrales.' : 'No hay alertas que coincidan con el filtro seleccionado.' })));
+      el('p', { text: 'No hay alertas activas. Todas las estaciones monitoreadas están dentro de sus umbrales.' })));
     return;
   }
   list.forEach((a) => {
@@ -1446,7 +1728,11 @@ async function forceSync() {
       const summary = await api('/api/summary');
       if (!summary.cargando) {
         await refresh(false);
-        toast(`✓ Sincronización completada (${summary.last_sync || ''})`, 'ok');
+        if (summary.last_error) {
+          toast(`Sincronización parcial: ${summary.last_error}`, 'error');
+        } else {
+          toast(`✓ Sincronización completada (${summary.last_sync || ''})`, 'ok');
+        }
         return;
       }
     }
@@ -1621,6 +1907,182 @@ function sendBrowserAlertNotification(nuevas) {
   }
 }
 
+const SOUND_DEFAULT_PRESETS = {
+  CRITICO: 'siren',
+  ADVERTENCIA: 'amber_dual',
+  PREVENTIVA: 'chime',
+};
+
+const SOUND_GALLERY = {
+  CRITICO: {
+    // Sirena nuclear/radioactiva exagerada con barrido ascendente/descendente y doble oscilador desafinado
+    siren: [
+      { delay: 0.00, freq: 310, peakFreq: 1120, peakAt: 0.52, endFreq: 290, dur: 1.18, type: 'sawtooth', vol: 0.14, detune: 22, hold: 0.85 },
+      { delay: 0.00, freq: 155, peakFreq: 380, peakAt: 0.52, endFreq: 145, dur: 1.18, type: 'square', vol: 0.06, hold: 0.85 },
+      { delay: 1.24, freq: 320, peakFreq: 1180, peakAt: 0.52, endFreq: 270, dur: 1.24, type: 'sawtooth', vol: 0.15, detune: 24, hold: 0.85 },
+      { delay: 1.24, freq: 160, peakFreq: 400, peakAt: 0.52, endFreq: 140, dur: 1.24, type: 'square', vol: 0.06, hold: 0.85 },
+    ],
+    // Klaxon pesado de búnker / submarino
+    alarm: [
+      { delay: 0.00, freq: 480, endFreq: 510, dur: 0.24, type: 'sawtooth', vol: 0.15, detune: 28, hold: 0.82 },
+      { delay: 0.29, freq: 720, endFreq: 750, dur: 0.24, type: 'sawtooth', vol: 0.15, detune: 28, hold: 0.82 },
+      { delay: 0.58, freq: 480, endFreq: 510, dur: 0.24, type: 'sawtooth', vol: 0.15, detune: 28, hold: 0.82 },
+      { delay: 0.87, freq: 720, endFreq: 780, dur: 0.36, type: 'sawtooth', vol: 0.16, detune: 30, hold: 0.84 },
+    ],
+    // Pulsos rápidos estilo Geiger / radiación aguda
+    radar: [
+      { delay: 0.00, freq: 1480, endFreq: 780, dur: 0.14, type: 'sawtooth', vol: 0.13, detune: 18 },
+      { delay: 0.16, freq: 1480, endFreq: 780, dur: 0.14, type: 'sawtooth', vol: 0.13, detune: 18 },
+      { delay: 0.32, freq: 1620, endFreq: 840, dur: 0.14, type: 'sawtooth', vol: 0.14, detune: 18 },
+      { delay: 0.50, freq: 1620, endFreq: 680, dur: 0.30, type: 'sawtooth', vol: 0.15, detune: 22 },
+    ],
+  },
+  ADVERTENCIA: {
+    amber_dual: [
+      { delay: 0.00, freq: 660, dur: 0.16, type: 'triangle', vol: 0.13 },
+      { delay: 0.20, freq: 520, dur: 0.24, type: 'triangle', vol: 0.12 },
+    ],
+    bell_warn: [
+      { delay: 0.00, freq: 740, dur: 0.18, type: 'sine', vol: 0.13 },
+      { delay: 0.22, freq: 740, dur: 0.24, type: 'sine', vol: 0.12 },
+    ],
+    pulse_mid: [
+      { delay: 0.00, freq: 587, endFreq: 698, dur: 0.16, type: 'triangle', vol: 0.12 },
+      { delay: 0.20, freq: 698, endFreq: 587, dur: 0.20, type: 'triangle', vol: 0.11 },
+    ],
+  },
+  PREVENTIVA: {
+    chime: [
+      { delay: 0.00, freq: 523.25, dur: 0.16, type: 'sine', vol: 0.10 },
+      { delay: 0.16, freq: 659.25, dur: 0.26, type: 'sine', vol: 0.10 },
+    ],
+    crystal: [
+      { delay: 0.00, freq: 659.25, dur: 0.14, type: 'sine', vol: 0.09 },
+      { delay: 0.14, freq: 783.99, dur: 0.26, type: 'sine', vol: 0.09 },
+    ],
+    ping: [
+      { delay: 0.00, freq: 587.33, dur: 0.28, type: 'sine', vol: 0.10 },
+    ],
+  },
+};
+
+function getSoundPreset(level) {
+  const lvl = SOUND_GALLERY[level] ? level : 'PREVENTIVA';
+  try {
+    const saved = localStorage.getItem(`dga_sound_preset_${lvl}`);
+    if (saved && SOUND_GALLERY[lvl][saved]) return saved;
+  } catch (_) {}
+  return SOUND_DEFAULT_PRESETS[lvl];
+}
+
+function setSoundPreset(level, preset) {
+  if (!SOUND_GALLERY[level] || !SOUND_GALLERY[level][preset]) return;
+  try {
+    localStorage.setItem(`dga_sound_preset_${level}`, preset);
+  } catch (_) {}
+}
+
+function playToneSequence(steps) {
+  try {
+    State.audioCtx = State.audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = State.audioCtx;
+    if (ctx.state === 'suspended') ctx.resume();
+    const base = ctx.currentTime + 0.01;
+    steps.forEach((s) => {
+      const start = base + (s.delay || 0);
+      const dur = s.dur || 0.18;
+      const vol = s.vol || 0.12;
+      const holdPoint = start + dur * (s.hold || 0.35);
+
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.001, start);
+      gain.gain.linearRampToValueAtTime(vol, start + 0.02);
+      if (s.hold) {
+        gain.gain.setValueAtTime(vol, holdPoint);
+      }
+      gain.gain.exponentialRampToValueAtTime(0.001, start + dur);
+      gain.connect(ctx.destination);
+
+      const detunes = s.detune ? [-s.detune, s.detune] : [0];
+      detunes.forEach((dt) => {
+        const osc = ctx.createOscillator();
+        osc.type = s.type || 'sine';
+        osc.detune.setValueAtTime(dt, start);
+        osc.frequency.setValueAtTime(s.freq, start);
+        if (s.peakFreq) {
+          const peakTime = start + dur * (s.peakAt || 0.5);
+          osc.frequency.exponentialRampToValueAtTime(s.peakFreq, peakTime);
+          if (s.endFreq) {
+            osc.frequency.exponentialRampToValueAtTime(s.endFreq, start + dur);
+          }
+        } else if (s.endFreq) {
+          osc.frequency.linearRampToValueAtTime(s.endFreq, start + dur);
+        }
+        osc.connect(gain);
+        osc.start(start);
+        osc.stop(start + dur + 0.02);
+      });
+    });
+  } catch (err) {
+    console.warn('Audio no disponible', err);
+  }
+}
+
+function playAlertSound(level, overridePreset = null) {
+  const lvl = SOUND_GALLERY[level] ? level : 'PREVENTIVA';
+  const preset = overridePreset && SOUND_GALLERY[lvl][overridePreset]
+    ? overridePreset
+    : getSoundPreset(lvl);
+  playToneSequence(SOUND_GALLERY[lvl][preset]);
+}
+
+function beep(freq, duration) {
+  playToneSequence([{ delay: 0, freq, dur: duration, type: 'sine', vol: 0.11 }]);
+}
+
+function closeSoundGallery() {
+  const pop = $('sound-gallery-popover');
+  const btn = $('btn-sound-gallery');
+  if (pop) pop.classList.add('hidden');
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+}
+
+function initSoundGallery() {
+  const btn = $('btn-sound-gallery');
+  const pop = $('sound-gallery-popover');
+  const wrap = $('sound-control-wrap');
+  if (!btn || !pop || !wrap) return;
+
+  pop.querySelectorAll('.sound-preset-select').forEach((sel) => {
+    const lvl = sel.dataset.soundLevel;
+    sel.value = getSoundPreset(lvl);
+    sel.addEventListener('change', () => {
+      setSoundPreset(lvl, sel.value);
+      playAlertSound(lvl, sel.value);
+    });
+  });
+
+  pop.querySelectorAll('.btn-sound-test').forEach((testBtn) => {
+    testBtn.addEventListener('click', () => {
+      const lvl = testBtn.dataset.testSound;
+      playAlertSound(lvl);
+      testBtn.classList.add('playing');
+      setTimeout(() => testBtn.classList.remove('playing'), 550);
+    });
+  });
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const opening = pop.classList.contains('hidden');
+    pop.classList.toggle('hidden', !opening);
+    btn.setAttribute('aria-expanded', String(opening));
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!wrap.contains(e.target)) closeSoundGallery();
+  });
+}
+
 function checkNewAlerts() {
   syncNotifyButton();
   const ids = new Set(State.alertas.map((a) => a.id));
@@ -1630,32 +2092,14 @@ function checkNewAlerts() {
       toast(`Nueva alerta: ${nuevas[0].nombre}${nuevas.length > 1 ? ` (+${nuevas.length - 1})` : ''}`, 'error');
       sendBrowserAlertNotification(nuevas);
       if (State.soundEnabled) {
-        const critica = nuevas.some((a) => a.nivel_alerta === 'CRITICO');
-        beep(critica ? 880 : 620, 0.25);
-        if (critica) setTimeout(() => beep(880, 0.25), 350);
+        const topLevel = nuevas.some((a) => a.nivel_alerta === 'CRITICO')
+          ? 'CRITICO'
+          : (nuevas.some((a) => a.nivel_alerta === 'ADVERTENCIA') ? 'ADVERTENCIA' : 'PREVENTIVA');
+        playAlertSound(topLevel);
       }
     }
   }
   State.knownAlertIds = ids;
-}
-
-function beep(freq, duration) {
-  try {
-    State.audioCtx = State.audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-    const ctx = State.audioCtx;
-    if (ctx.state === 'suspended') ctx.resume();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.value = freq;
-    gain.gain.setValueAtTime(0.12, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + duration);
-  } catch (err) {
-    console.warn('Audio no disponible', err);
-  }
 }
 
 /* ----------------------------------------------------------------- historial temporal (30 días) */

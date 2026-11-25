@@ -160,6 +160,11 @@ def get_alertas():
     return jsonify(service.get_alertas())
 
 
+@app.route("/api/alertas/cauces")
+def get_alertas_cauces():
+    return jsonify(service.get_critical_river_geometries())
+
+
 @app.route("/api/alertas/historial")
 def get_alertas_historial():
     periodo = request.args.get("periodo", "30d").strip()
