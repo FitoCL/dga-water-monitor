@@ -648,11 +648,14 @@ const ALERT_FILTER_LEVELS = {
 
 function alertAsMapItem(a) {
   const isEmb = a.tipo_elemento === 'embalse';
+  const stMatch = !isEmb ? State.estaciones.find((s) => s.codigo === a.codigo) : null;
   return {
     codigo: a.codigo,
     nombre: a.nombre,
     tipo: isEmb ? 'Embalse / Lago' : 'Fluviométrica (Río)',
     categoria: isEmb ? 'embalse' : 'estacion',
+    region: stMatch ? stMatch.region : String(parseInt(String(a.codigo || '').slice(0, 2), 10) || '0'),
+    altitud: stMatch ? stMatch.altitud : null,
     lat: Number(a.lat),
     lng: Number(a.lng),
     estado: a.nivel_alerta,
@@ -883,6 +886,143 @@ const RIVER_ALERT_STYLE = {
   },
 };
 
+function drawStyledRiverReach(paths, estado, displayRiverName, tooltipDetail) {
+  const style = RIVER_ALERT_STYLE[estado];
+  if (!style || !paths || !paths.length) return;
+
+  const glowLine = L.polyline(paths, {
+    color: style.glowColor,
+    weight: style.glowWeight,
+    opacity: style.glowOpacity,
+    className: style.glowClass,
+    lineCap: 'round',
+    lineJoin: 'round',
+    interactive: false,
+  });
+  glowLine.addTo(State.riverLayer);
+
+  const coreLine = L.polyline(paths, {
+    color: style.coreColor,
+    weight: style.coreWeight,
+    opacity: 0.95,
+    className: style.coreClass,
+    lineCap: 'round',
+    lineJoin: 'round',
+  });
+
+  const tooltipNode = el('div', { class: `river-critical-tooltip ${style.tooltipClass}`.trim() },
+    icon(`fa-solid ${style.icon}`),
+    el('span', {},
+      `${style.label}: `,
+      el('strong', { text: displayRiverName }),
+      tooltipDetail ? ` ${tooltipDetail}` : ''));
+
+  coreLine.bindTooltip(tooltipNode, {
+    sticky: true,
+    direction: 'top',
+    offset: [0, -6],
+    className: 'river-critical-leaflet-tooltip',
+  });
+
+  coreLine.on('click', () => {
+    State.map.fitBounds(coreLine.getBounds(), { padding: [55, 55], maxZoom: 14 });
+  });
+
+  coreLine.addTo(State.riverLayer);
+}
+
+function splitRiverPathsByDownstreamAlerts(rawLatlngs, timelineStations) {
+  const paths = Array.isArray(rawLatlngs[0] && rawLatlngs[0][0]) ? rawLatlngs : [rawLatlngs];
+  const uniqueStates = new Set(timelineStations.map((a) => a.estado));
+  if (uniqueStates.size <= 1) {
+    const onlyEstado = timelineStations[0] && timelineStations[0].estado;
+    return RIVER_ALERT_STYLE[onlyEstado] ? [{ estado: onlyEstado, paths }] : [];
+  }
+
+  // Ordenar estaciones monitoreadas (alertas + normales) de aguas arriba hacia aguas abajo
+  const withAlt = timelineStations.every((a) => Number(a.altitud) > 0);
+  const ordered = [...timelineStations].sort((a, b) => (
+    withAlt
+      ? (Number(b.altitud) - Number(a.altitud))
+      : (Number(b.lng) - Number(a.lng))
+  ));
+
+  const first = ordered[0];
+  const last = ordered[ordered.length - 1];
+  const oLat = Number(first.lat);
+  const oLng = Number(first.lng);
+  const dLat = Number(last.lat) - oLat;
+  const dLng = Number(last.lng) - oLng;
+  if (Math.hypot(dLat, dLng) < 1e-6) {
+    const firstAlert = ordered.find((a) => RIVER_ALERT_STYLE[a.estado]);
+    return firstAlert ? [{ estado: firstAlert.estado, paths }] : [];
+  }
+
+  const flowT = (pt) => (pt[0] - oLat) * dLat + (pt[1] - oLng) * dLng;
+  const thresholds = ordered.slice(1).map((st) => ({
+    t: flowT([Number(st.lat), Number(st.lng)]),
+    estado: st.estado,
+  })).sort((a, b) => a.t - b.t);
+
+  const estadoAtT = (t) => {
+    let cur = ordered[0].estado;
+    for (let i = 0; i < thresholds.length; i += 1) {
+      if (t >= thresholds[i].t) cur = thresholds[i].estado;
+      else break;
+    }
+    return cur;
+  };
+
+  const buckets = new Map();
+  const pushSeg = (estado, seg) => {
+    // No destacar tramos cuya estación aguas abajo volvió a estado NORMAL
+    if (!RIVER_ALERT_STYLE[estado] || seg.length < 2) return;
+    if (!buckets.has(estado)) buckets.set(estado, []);
+    buckets.get(estado).push(seg);
+  };
+
+  paths.forEach((path) => {
+    if (path.length < 2) return;
+    let curEstado = estadoAtT(flowT(path[0]));
+    let curSeg = [path[0]];
+
+    for (let i = 1; i < path.length; i += 1) {
+      const a = path[i - 1];
+      const b = path[i];
+      const ta = flowT(a);
+      const tb = flowT(b);
+
+      if (Math.abs(tb - ta) < 1e-12) {
+        curSeg.push(b);
+        continue;
+      }
+
+      // Buscar todos los umbrales cruzados entre ta y tb en orden de recorrido
+      const crossed = thresholds
+        .filter((th) => (ta < th.t && th.t <= tb) || (ta > th.t && th.t >= tb))
+        .sort((x, y) => (tb > ta ? x.t - y.t : y.t - x.t));
+
+      crossed.forEach((th) => {
+        const ratio = (th.t - ta) / (tb - ta);
+        const mid = [a[0] + (b[0] - a[0]) * ratio, a[1] + (b[1] - a[1]) * ratio];
+        curSeg.push(mid);
+        pushSeg(curEstado, curSeg);
+        const nextEstado = tb > ta ? th.estado : estadoAtT(th.t - 1e-9);
+        curEstado = nextEstado;
+        curSeg = [mid];
+      });
+
+      curSeg.push(b);
+      curEstado = estadoAtT(tb);
+    }
+    pushSeg(curEstado, curSeg);
+  });
+
+  return Array.from(buckets.entries())
+    .map(([estado, segs]) => ({ estado, paths: segs }))
+    .sort((a, b) => (SEVERITY_Z[a.estado] || 0) - (SEVERITY_Z[b.estado] || 0));
+}
+
 function renderCriticalRiverReaches(visible = null) {
   if (!State.map) return;
   if (!State.riverLayer) {
@@ -904,15 +1044,14 @@ function renderCriticalRiverReaches(visible = null) {
 
   if (!alertItems.length) return;
 
-  const processedBasins = new Set();
+  const basinAlerts = new Map();
 
   alertItems.forEach((alertItem) => {
-    const estado = alertItem.estado;
-    const style = RIVER_ALERT_STYLE[estado];
+    const style = RIVER_ALERT_STYLE[alertItem.estado];
     const lat = Number(alertItem.lat);
     const lng = Number(alertItem.lng);
 
-    // 1. Agregar halo/onda expansiva en la estación con alerta
+    // 1. Agregar halo/onda expansiva en cada estación con alerta
     const waveIcon = L.divIcon({
       html: `<div class="${style.waveClass}"></div>`,
       className: 'critical-wave-icon',
@@ -923,17 +1062,22 @@ function renderCriticalRiverReaches(visible = null) {
 
     if (alertItem.categoria === 'embalse') return;
 
-    // 2. Extraer el nombre del río/cuenca y región (el mayor nivel de alerta prevalece por río)
+    // 2. Agrupar alertas por río y región para permitir transición de color aguas abajo
     const riverName = extractRiverName(alertItem.nombre);
     const normRiver = normRiverText(riverName);
     const basinKey = `${alertItem.region || '0'}:${normRiver}`;
-    if (processedBasins.has(basinKey)) return;
-    processedBasins.add(basinKey);
+    if (!basinAlerts.has(basinKey)) {
+      basinAlerts.set(basinKey, { riverName, normRiver, region: alertItem.region, alerts: [] });
+    }
+    basinAlerts.get(basinKey).alerts.push(alertItem);
+  });
 
+  basinAlerts.forEach(({ riverName, normRiver, region, alerts }) => {
+    const primary = alerts[0];
     // 3. Buscar trazado geométrico oficial MOP (Red Hidrográfica 1:250k)
     const official = (State.criticalRivers || []).find((r) => (
-      r.codigo === alertItem.codigo
-      || (normRiverText(r.river_name) === normRiver && (!alertItem.region || !r.region || r.region === alertItem.region))
+      alerts.some((a) => r.codigo === a.codigo)
+      || (normRiverText(r.river_name) === normRiver && (!region || !r.region || r.region === region))
     ));
 
     let latlngs = null;
@@ -945,10 +1089,9 @@ function renderCriticalRiverReaches(visible = null) {
       displayRiverName = official.official_name || riverName;
       tooltipDetail = official.source ? `(${official.source})` : '(Red Hidrográfica MOP)';
     } else {
-      // Fallback: encadenar estaciones del mismo cauce por cercanía espacial
       const basinStations = (State.estaciones || []).filter((st) => {
         if (!validCoords(st.lat, st.lng)) return false;
-        if (st.region && alertItem.region && st.region !== alertItem.region) return false;
+        if (st.region && region && st.region !== region) return false;
         return normRiverText(extractRiverName(st.nombre)) === normRiver;
       });
       if (basinStations.length >= 2) {
@@ -964,47 +1107,25 @@ function renderCriticalRiverReaches(visible = null) {
     }
 
     if (latlngs && latlngs.length > 0) {
-      // Línea exterior fina con resplandor acorde al nivel de alerta
-      const glowLine = L.polyline(latlngs, {
-        color: style.glowColor,
-        weight: style.glowWeight,
-        opacity: style.glowOpacity,
-        className: style.glowClass,
-        lineCap: 'round',
-        lineJoin: 'round',
-        interactive: false,
+      // Incorporar estaciones activas en estado NORMAL del mismo río para cortar el destacado aguas abajo
+      const timelineMap = new Map();
+      (State.estaciones || []).forEach((st) => {
+        if (!validCoords(st.lat, st.lng)) return;
+        if (st.region && region && st.region !== region) return;
+        if (normRiverText(extractRiverName(st.nombre)) !== normRiver) return;
+        if (['CRITICO', 'ADVERTENCIA', 'PREVENTIVA', 'NORMAL'].includes(st.estado)) {
+          timelineMap.set(st.codigo, st);
+        }
       });
-      glowLine.addTo(State.riverLayer);
+      alerts.forEach((a) => timelineMap.set(a.codigo, a));
+      const timelineStations = Array.from(timelineMap.values());
 
-      // Línea central fina animada siguiendo el cauce exacto
-      const coreLine = L.polyline(latlngs, {
-        color: style.coreColor,
-        weight: style.coreWeight,
-        opacity: 0.95,
-        className: style.coreClass,
-        lineCap: 'round',
-        lineJoin: 'round',
-      });
-
-      const tooltipNode = el('div', { class: `river-critical-tooltip ${style.tooltipClass}`.trim() },
-        icon(`fa-solid ${style.icon}`),
-        el('span', {},
-          `${style.label}: `,
-          el('strong', { text: displayRiverName }),
-          tooltipDetail ? ` ${tooltipDetail}` : ''));
-
-      coreLine.bindTooltip(tooltipNode, {
-        sticky: true,
-        direction: 'top',
-        offset: [0, -6],
-        className: 'river-critical-leaflet-tooltip',
-      });
-
-      coreLine.on('click', () => {
-        State.map.fitBounds(coreLine.getBounds(), { padding: [55, 55], maxZoom: 14 });
-      });
-
-      coreLine.addTo(State.riverLayer);
+      const reaches = splitRiverPathsByDownstreamAlerts(latlngs, timelineStations);
+      reaches
+        .filter(({ estado }) => !targetLevels || targetLevels.includes(estado))
+        .forEach(({ estado, paths }) => {
+          drawStyledRiverReach(paths, estado, displayRiverName, tooltipDetail);
+        });
     }
   });
 }
