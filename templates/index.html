@@ -10,7 +10,7 @@
   <!-- Librerías servidas localmente (sin dependencias de CDN de terceros) -->
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css', v='4') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fontawesome/css/all.min.css', v='4') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='37') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='38') }}">
 </head>
 <body>
   <header class="navbar">
@@ -28,7 +28,7 @@
     </div>
 
     <div class="nav-actions">
-      <button id="btn-history" class="btn btn-hud-history" type="button" title="Ver registro histórico temporal de alertas (30 días)">
+      <button id="btn-history" class="btn btn-hud-history" type="button" title="Ver registro histórico temporal de alertas (hasta 1 año)">
         <i class="fa-solid fa-clock-rotate-left"></i>
         <span>Historial alertas</span>
         <span id="history-badge" class="history-count-pill">0</span>
@@ -298,7 +298,7 @@
             <button id="modal-btn-thresh" class="hud-pill hud-pill-subtle" type="button" aria-expanded="false">
               <i class="fa-solid fa-sliders"></i> Umbrales
             </button>
-            <button id="modal-btn-history" class="hud-pill hud-pill-subtle" type="button" title="Ver evolución histórica (24 h / 7 días / 30 días)">
+            <button id="modal-btn-history" class="hud-pill hud-pill-subtle" type="button" title="Ver evolución histórica (24h / 7d / 1m / 3m / 1 año)">
               <i class="fa-solid fa-chart-line"></i> Evolución
             </button>
           </div>
@@ -364,21 +364,29 @@
       <div id="history-panel" class="history-panel accent-normal">
         <div class="history-head">
           <div class="history-head-left">
-            <div class="history-kicker">REGISTRO HISTÓRICO DE ALERTAS · RETENCIÓN TEMPORAL 30 DÍAS</div>
+            <div class="history-kicker">REGISTRO HISTÓRICO DE ALERTAS · RETENCIÓN TEMPORAL 1 AÑO (365 DÍAS)</div>
             <div class="history-title-row">
               <h2 id="history-title">Evolución de estaciones</h2>
               <span id="history-level-badge" class="badge badge-normal hidden">--</span>
             </div>
             <div id="history-subtitle" class="history-subtitle">Selecciona una estación o vista comparativa</div>
           </div>
-          <button id="history-close" class="btn-close" type="button" aria-label="Cerrar">&times;</button>
+          <div class="history-head-actions">
+            <button id="btn-history-export" class="hud-pill hud-pill-excel" type="button" title="Exportar los datos a una planilla en formato Excel (.xlsx)">
+              <i class="fa-solid fa-file-excel" aria-hidden="true"></i>
+              <span>Exportar datos</span>
+            </button>
+            <button id="history-close" class="btn-close" type="button" aria-label="Cerrar">&times;</button>
+          </div>
         </div>
 
         <div class="history-controls">
           <div class="history-control-group" id="history-periods" role="group" aria-label="Período de tiempo">
-            <button class="hud-pill active" data-period="24h" type="button">24 h</button>
-            <button class="hud-pill" data-period="7d" type="button">7 días</button>
-            <button class="hud-pill" data-period="30d" type="button">30 días</button>
+            <button class="hud-pill active" data-period="24h" type="button">24h</button>
+            <button class="hud-pill" data-period="7d" type="button">7d</button>
+            <button class="hud-pill" data-period="30d" type="button">1m</button>
+            <button class="hud-pill" data-period="90d" type="button">3m</button>
+            <button class="hud-pill" data-period="365d" type="button">1 año</button>
           </div>
           <div class="history-control-group" id="history-level-filter" role="group" aria-label="Filtrar por severidad">
             <button class="hud-pill hud-pill-subtle active" data-level="ALL" type="button">Todas</button>
@@ -406,19 +414,19 @@
         <div id="history-log-section" class="history-log-section">
           <div class="history-log-header">
             <span id="history-log-title">REGISTRO TEMPORAL GUARDADO</span>
-            <span id="history-retention-info" class="history-retention-tag">30 días</span>
+            <span id="history-retention-info" class="history-retention-tag">1 año (365 días)</span>
           </div>
           <div id="history-log-list" class="history-log-list"></div>
         </div>
 
         <p id="history-footnote" class="history-footnote">
-          Hora de medición informada por la DGA. Las alertas Críticas, Advertencias y Preventivas se guardan temporalmente durante 30 días en cada sincronización.
+          Hora de medición informada por la DGA. Las alertas Críticas, Advertencias y Preventivas se guardan temporalmente durante 1 año (365 días) en cada sincronización.
         </p>
       </div>
     </div>
   </div>
 
   <script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js', v='4') }}"></script>
-  <script src="{{ url_for('static', filename='app.js', v='57') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='59') }}"></script>
 </body>
 </html>

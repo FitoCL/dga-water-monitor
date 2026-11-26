@@ -26,8 +26,10 @@ import tempfile
 import threading
 import time
 import unicodedata
+import xml.etree.ElementTree as ET
 import zipfile
 from datetime import datetime, timedelta, timezone
+from xml.sax.saxutils import escape as xml_escape
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -40,11 +42,12 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 CONFIG_PATH = os.path.join(DATA_DIR, "alerts_config.json")
 CACHE_PATH = os.path.join(DATA_DIR, "cache.json")
 HISTORY_PATH = os.path.join(DATA_DIR, "alerts_history.json")
+HISTORY_ARCHIVE_DIR = os.path.join(DATA_DIR, "history_archives")
 RIVERS_CACHE_PATH = os.path.join(DATA_DIR, "rivers_cache.json")
 HISTORY_VERSION = 1
 RIVERS_CACHE_VERSION = 1
-HISTORY_RETENTION_DAYS = 30
-MAX_HISTORY_POINTS_PER_STATION = 3000
+HISTORY_RETENTION_DAYS = 365
+MAX_HISTORY_POINTS_PER_STATION = 20000
 
 MAPAS2_URL = "https://mapas2.mop.gob.cl"
 ARCGIS_DGA = "https://rest-sit.mop.gob.cl/arcgis/rest/services/DGA"
@@ -84,6 +87,156 @@ DEFAULT_CONFIG = {
 
 
 # ----------------------------------------------------------------------------- utilidades
+def _xlsx_col_ref(col_idx):
+    """Convierte índice 1-based de columna Excel a letra (1->A, 27->AA)."""
+    out = []
+    n = col_idx
+    while n > 0:
+        n, rem = divmod(n - 1, 26)
+        out.append(chr(65 + rem))
+    return "".join(reversed(out))
+
+
+def _xlsx_clean_text(val):
+    s = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", str(val if val is not None else ""))
+    if s and s[0] in ("=", "+", "-", "@"):
+        s = "'" + s
+    return s
+
+
+def _build_xlsx_workbook(sheets):
+    """Genera un libro Excel (.xlsx) válido en memoria usando solo librería estándar."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        sheet_overrides = "".join(
+            f'<Override PartName="/xl/worksheets/sheet{i}.xml" '
+            f'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+            for i in range(1, len(sheets) + 1)
+        )
+        content_types = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+            '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+            f'{sheet_overrides}</Types>'
+        )
+        zf.writestr("[Content_Types].xml", content_types)
+
+        rels_root = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+            '</Relationships>'
+        )
+        zf.writestr("_rels/.rels", rels_root)
+
+        wb_sheets = []
+        wb_rels = []
+        for idx, (raw_name, _) in enumerate(sheets, start=1):
+            safe_name = re.sub(r"[\[\]:*?/\\]", " ", str(raw_name)).strip()[:31] or f"Hoja{idx}"
+            wb_sheets.append(f'<sheet name="{xml_escape(safe_name)}" sheetId="{idx}" r:id="rId{idx}"/>')
+            wb_rels.append(
+                f'<Relationship Id="rId{idx}" '
+                f'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+                f'Target="worksheets/sheet{idx}.xml"/>'
+            )
+        style_rid = len(sheets) + 1
+        wb_rels.append(
+            f'<Relationship Id="rId{style_rid}" '
+            f'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" '
+            f'Target="styles.xml"/>'
+        )
+
+        workbook_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            f'<sheets>{"".join(wb_sheets)}</sheets></workbook>'
+        )
+        zf.writestr("xl/workbook.xml", workbook_xml)
+
+        wb_rels_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            f'{"".join(wb_rels)}</Relationships>'
+        )
+        zf.writestr("xl/_rels/workbook.xml.rels", wb_rels_xml)
+
+        styles_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            '<fonts count="2">'
+            '<font><sz val="11"/><color rgb="FF0F172A"/><name val="Calibri"/></font>'
+            '<font><b/><sz val="11"/><color rgb="FFF8FAFC"/><name val="Calibri"/></font>'
+            '</fonts>'
+            '<fills count="3">'
+            '<fill><patternFill patternType="none"/></fill>'
+            '<fill><patternFill patternType="gray125"/></fill>'
+            '<fill><patternFill patternType="solid"><fgColor rgb="FF0F172A"/></patternFill></fill>'
+            '</fills>'
+            '<borders count="2">'
+            '<border><left/><right/><top/><bottom/><diagonal/></border>'
+            '<border><left style="thin"><color rgb="FFCBD5E1"/></left>'
+            '<right style="thin"><color rgb="FFCBD5E1"/></right>'
+            '<top style="thin"><color rgb="FFCBD5E1"/></top>'
+            '<bottom style="thin"><color rgb="FFCBD5E1"/></bottom></border>'
+            '</borders>'
+            '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+            '<cellXfs count="3">'
+            '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0"/>'
+            '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>'
+            '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1"/>'
+            '</cellXfs>'
+            '</styleSheet>'
+        )
+        zf.writestr("xl/styles.xml", styles_xml)
+
+        for idx, (_, rows) in enumerate(sheets, start=1):
+            num_cols = max((len(r) for r in rows), default=1)
+            widths = [12] * num_cols
+            for r in rows[:500]:
+                for c_i, v in enumerate(r):
+                    widths[c_i] = max(widths[c_i], min(len(str(v if v is not None else "")) + 4, 42))
+            cols_xml = "".join(
+                f'<col min="{c_i + 1}" max="{c_i + 1}" width="{w}" customWidth="1"/>'
+                for c_i, w in enumerate(widths)
+            )
+
+            row_xmls = []
+            for r_i, row in enumerate(rows, start=1):
+                is_header = r_i == 1
+                cells = []
+                for c_i, val in enumerate(row, start=1):
+                    ref = f"{_xlsx_col_ref(c_i)}{r_i}"
+                    if is_header:
+                        txt = xml_escape(_xlsx_clean_text(val))
+                        cells.append(f'<c r="{ref}" t="inlineStr" s="1"><is><t>{txt}</t></is></c>')
+                    elif isinstance(val, (int, float)) and not isinstance(val, bool) and math.isfinite(float(val)):
+                        cells.append(f'<c r="{ref}" s="2"><v>{val}</v></c>')
+                    else:
+                        txt = xml_escape(_xlsx_clean_text(val))
+                        cells.append(f'<c r="{ref}" t="inlineStr" s="0"><is><t>{txt}</t></is></c>')
+                row_xmls.append(f'<row r="{r_i}">{"".join(cells)}</row>')
+
+            last_col = _xlsx_col_ref(num_cols)
+            last_row = max(len(rows), 1)
+            sheet_xml = (
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                '<sheetViews><sheetView workbookViewId="0">'
+                '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>'
+                '</sheetView></sheetViews>'
+                f'<cols>{cols_xml}</cols>'
+                f'<sheetData>{"".join(row_xmls)}</sheetData>'
+                f'<autoFilter ref="A1:{last_col}{last_row}"/>'
+                '</worksheet>'
+            )
+            zf.writestr(f"xl/worksheets/sheet{idx}.xml", sheet_xml)
+    return buf.getvalue()
+
+
 def base_code(code):
     """'05710001-K' -> '05710001'."""
     return str(code or "").split("-")[0].strip()
@@ -369,21 +522,27 @@ class DGAService:
                 return empty
             cutoff = now().timestamp() - HISTORY_RETENTION_DAYS * 86400
             clean_stations = {}
+            expired_by_year = {}
             for skey, st in stations.items():
                 if not isinstance(st, dict):
                     continue
-                pts = [
+                valid_pts = [
                     p for p in (st.get("points") or [])
                     if isinstance(p, dict) and isinstance(p.get("ts"), (int, float))
-                    and p["ts"] >= cutoff
                     and p.get("nivel") in ("CRITICO", "ADVERTENCIA", "PREVENTIVA")
                 ]
+                expired = [p for p in valid_pts if p["ts"] < cutoff]
+                if expired:
+                    self._collect_expired_points(expired_by_year, str(skey), st, expired)
+                pts = [p for p in valid_pts if p["ts"] >= cutoff]
                 if not pts:
                     continue
                 pts.sort(key=lambda p: p["ts"])
                 st_clean = dict(st)
                 st_clean["points"] = pts[-MAX_HISTORY_POINTS_PER_STATION:]
                 clean_stations[str(skey)] = st_clean
+            if expired_by_year:
+                self._archive_expired_history(expired_by_year)
             empty["updated"] = raw.get("updated")
             empty["stations"] = clean_stations
         except Exception as e:
@@ -397,6 +556,176 @@ class DGAService:
             atomic_write_json(HISTORY_PATH, snapshot)
         except Exception as e:
             log.error("No se pudo guardar alerts_history.json: %s", e)
+
+    @staticmethod
+    def _collect_expired_points(expired_by_year, skey, st, expired_pts):
+        """Agrupa registros históricos expirados (> 1 año) por año calendario para archivarlos."""
+        for p in expired_pts:
+            ts = p.get("ts") or 0
+            try:
+                yr = datetime.fromtimestamp(ts).year
+            except (OSError, OverflowError, ValueError):
+                yr = now().year
+            yr_map = expired_by_year.setdefault(yr, {})
+            entry = yr_map.get(skey)
+            if entry is None:
+                entry = {
+                    "key": st.get("key") or skey,
+                    "codigo": st.get("codigo"),
+                    "nombre": st.get("nombre"),
+                    "tipo_elemento": st.get("tipo_elemento") or "estacion",
+                    "comuna": st.get("comuna") or "",
+                    "region_nombre": st.get("region_nombre") or "",
+                    "unidad": st.get("unidad") or "",
+                    "fuente": st.get("fuente") or "DGA oficial",
+                    "umbrales": dict(st.get("umbrales") or {}),
+                    "points": [],
+                }
+                yr_map[skey] = entry
+            entry["points"].append(dict(p))
+
+    @staticmethod
+    def _read_archived_xlsx_stations(zip_path, inner_xlsx):
+        """Lee la hoja 'Registros de Alertas' de un .xlsx archivado para fusionar nuevos puntos."""
+        stations = {}
+        with zipfile.ZipFile(zip_path, "r") as zin:
+            if inner_xlsx not in zin.namelist():
+                return stations
+            xlsx_bytes = zin.read(inner_xlsx)
+        with zipfile.ZipFile(io.BytesIO(xlsx_bytes), "r") as xz:
+            if "xl/worksheets/sheet1.xml" not in xz.namelist():
+                return stations
+            root = ET.fromstring(xz.read("xl/worksheets/sheet1.xml"))
+        ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+        rows = root.findall(".//m:sheetData/m:row", ns)
+        for row_el in rows[1:]:
+            vals = []
+            for c_el in row_el.findall("m:c", ns):
+                t_attr = c_el.attrib.get("t")
+                if t_attr == "inlineStr":
+                    t_el = c_el.find("m:is/m:t", ns)
+                    vals.append(t_el.text if (t_el is not None and t_el.text is not None) else "")
+                else:
+                    v_el = c_el.find("m:v", ns)
+                    if v_el is not None and v_el.text is not None:
+                        try:
+                            vals.append(float(v_el.text))
+                        except ValueError:
+                            vals.append(v_el.text)
+                    else:
+                        vals.append("")
+            if len(vals) < 13:
+                continue
+            fecha, codigo, nombre, tipo_txt, comuna, region_nombre, nivel, val, umb, _diff, unidad, fuente, sinc = vals[:13]
+            tipo_el = "embalse" if "embalse" in str(tipo_txt).lower() else "estacion"
+            skey = f"{tipo_el}:{codigo}"
+            st = stations.get(skey)
+            if st is None:
+                st = {
+                    "key": skey,
+                    "codigo": str(codigo),
+                    "nombre": str(nombre),
+                    "tipo_elemento": tipo_el,
+                    "comuna": str(comuna),
+                    "region_nombre": str(region_nombre),
+                    "unidad": str(unidad),
+                    "fuente": str(fuente),
+                    "points": [],
+                }
+                stations[skey] = st
+            st["points"].append({
+                "ts": _alert_fecha_ts(fecha),
+                "fecha": str(fecha),
+                "sinc": str(sinc),
+                "valor": val if isinstance(val, (int, float)) else None,
+                "umbral": umb if isinstance(umb, (int, float)) else None,
+                "nivel": str(nivel),
+                "fuente": str(fuente),
+                "unidad": str(unidad),
+            })
+        return stations
+
+    def _archive_expired_history(self, expired_by_year):
+        """Archiva registros que superan 1 año en formato .xlsx comprimido dentro de ZIP por año."""
+        if not expired_by_year:
+            return
+        os.makedirs(HISTORY_ARCHIVE_DIR, exist_ok=True)
+        for yr, new_stations in expired_by_year.items():
+            zip_path = os.path.join(HISTORY_ARCHIVE_DIR, f"alerts_history_{yr}.zip")
+            inner_xlsx = f"alerts_history_{yr}.xlsx"
+            with _FILE_WRITE_LOCK:
+                dst_stations = {}
+                if os.path.exists(zip_path):
+                    try:
+                        dst_stations = self._read_archived_xlsx_stations(zip_path, inner_xlsx)
+                    except Exception as e:
+                        log.warning("No se pudo leer respaldo previo %s (%s); se creará nuevo.", zip_path, e)
+
+                for skey, st_new in new_stations.items():
+                    dst = dst_stations.get(skey)
+                    if dst is None:
+                        dst = {**st_new, "points": []}
+                        dst_stations[skey] = dst
+                    pts = dst.setdefault("points", [])
+                    seen_keys = {
+                        (p.get("fecha"), p.get("nivel"), p.get("valor"), p.get("fuente"))
+                        for p in pts
+                    }
+                    for p in st_new.get("points") or []:
+                        k = (p.get("fecha"), p.get("nivel"), p.get("valor"), p.get("fuente"))
+                        if k not in seen_keys:
+                            seen_keys.add(k)
+                            pts.append(p)
+                    pts.sort(key=lambda p: p.get("ts") or 0)
+
+                stations_list = []
+                for st in dst_stations.values():
+                    pts = st.get("points") or []
+                    if not pts:
+                        continue
+                    vals = [p["valor"] for p in pts if isinstance(p.get("valor"), (int, float))]
+                    last_pt = pts[-1]
+                    stations_list.append({
+                        **st,
+                        "last_nivel": last_pt.get("nivel") or "PREVENTIVA",
+                        "max_nivel": max((p.get("nivel") for p in pts), key=lambda n: SEVERITY.get(n, 0)),
+                        "last_valor": last_pt.get("valor"),
+                        "last_umbral": last_pt.get("umbral"),
+                        "last_fecha": last_pt.get("fecha") or "",
+                        "stats": {
+                            "min": round_num(min(vals), 3) if vals else None,
+                            "max": round_num(max(vals), 3) if vals else None,
+                            "count": len(pts),
+                            "count_total": len(pts),
+                            "critico_count": sum(1 for p in pts if p.get("nivel") == "CRITICO"),
+                            "advertencia_count": sum(1 for p in pts if p.get("nivel") == "ADVERTENCIA"),
+                            "preventiva_count": sum(1 for p in pts if p.get("nivel") == "PREVENTIVA"),
+                        },
+                    })
+                stations_list.sort(key=lambda s: (-SEVERITY.get(s["last_nivel"], 0), -_alert_fecha_ts(s.get("last_fecha")), str(s.get("nombre") or "").lower()))
+
+                xlsx_bytes = self._format_history_xlsx_bytes(stations_list)
+                fd, tmp_zip = tempfile.mkstemp(dir=HISTORY_ARCHIVE_DIR, prefix=f".tmp_{yr}_", suffix=".zip")
+                os.close(fd)
+                try:
+                    with zipfile.ZipFile(tmp_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zout:
+                        zout.writestr(inner_xlsx, xlsx_bytes)
+                    for attempt in range(5):
+                        try:
+                            os.replace(tmp_zip, zip_path)
+                            break
+                        except PermissionError:
+                            if attempt == 4:
+                                raise
+                            time.sleep(0.04 * (attempt + 1))
+                    log.info("Historial anual %d archivado (.xlsx en ZIP): %s (%d estaciones)", yr, zip_path, len(stations_list))
+                except Exception as e:
+                    log.error("Error archivando historial anual %d en %s: %s", yr, zip_path, e)
+                    if os.path.exists(tmp_zip):
+                        try:
+                            os.remove(tmp_zip)
+                        except OSError:
+                            pass
 
     def _load_rivers_cache(self):
         empty = {"version": RIVERS_CACHE_VERSION, "rivers": {}}
@@ -937,6 +1266,7 @@ class DGAService:
         cutoff = now_ts - HISTORY_RETENTION_DAYS * 86400
         dirty = False
 
+        expired_by_year = {}
         with self._lock:
             stations = self.history.setdefault("stations", {})
             station_meta = {}
@@ -1021,6 +1351,9 @@ class DGAService:
             for skey in list(stations.keys()):
                 st = stations[skey]
                 pts = st.get("points") or []
+                expired = [p for p in pts if (p.get("ts") or 0) < cutoff]
+                if expired:
+                    self._collect_expired_points(expired_by_year, skey, st, expired)
                 pruned = [p for p in pts if (p.get("ts") or 0) >= cutoff]
                 if len(pruned) != len(pts):
                     dirty = True
@@ -1040,12 +1373,14 @@ class DGAService:
             if dirty:
                 self.history["updated"] = now_iso
 
+        if expired_by_year:
+            self._archive_expired_history(expired_by_year)
         if dirty:
             self._save_history()
 
     def get_alerts_history(self, periodo="30d", codigo=None, nivel=None):
-        """Retorna historial temporal (24h, 7d, 30d) de alertas por estación."""
-        period_days = {"24h": 1, "7d": 7, "30d": 30}
+        """Retorna historial temporal (24h, 7d, 30d, 60d, 90d, 365d) de alertas por estación."""
+        period_days = {"24h": 1, "7d": 7, "30d": 30, "60d": 60, "90d": 90, "365d": 365}
         if periodo not in period_days:
             periodo = "30d"
         days = period_days[periodo]
@@ -1054,7 +1389,8 @@ class DGAService:
         now_dt = now()
         end_ts = now_dt.timestamp()
         start_ts = end_ts - days * 86400
-        cutoff_30 = end_ts - HISTORY_RETENTION_DAYS * 86400
+        cutoff_max = end_ts - HISTORY_RETENTION_DAYS * 86400
+        cutoff_30 = end_ts - 30 * 86400
         filter_nivel = nivel if nivel in ("CRITICO", "ADVERTENCIA", "PREVENTIVA") else None
         filter_code = base_code(codigo) if codigo else None
 
@@ -1064,13 +1400,14 @@ class DGAService:
             history_updated = self.history.get("updated")
             raw_stations = list((self.history.get("stations") or {}).values())
             for st in raw_stations:
-                pts_30 = [p for p in (st.get("points") or []) if (p.get("ts") or 0) >= cutoff_30]
-                if not pts_30:
+                pts_max = [p for p in (st.get("points") or []) if (p.get("ts") or 0) >= cutoff_max]
+                if not pts_max:
                     continue
-                if filter_nivel and not any(p.get("nivel") == filter_nivel for p in pts_30):
+                if filter_nivel and not any(p.get("nivel") == filter_nivel for p in pts_max):
                     continue
 
-                win_pts = [p for p in pts_30 if start_ts <= (p.get("ts") or 0) <= end_ts + 3600]
+                win_pts = [p for p in pts_max if start_ts <= (p.get("ts") or 0) <= end_ts + 3600]
+                pts_30 = [p for p in pts_max if (p.get("ts") or 0) >= cutoff_30]
                 vals = [p["valor"] for p in win_pts if isinstance(p.get("valor"), (int, float))]
                 umbrales = dict(st.get("umbrales") or {})
                 unit = st.get("unidad") or ""
@@ -1087,11 +1424,11 @@ class DGAService:
                     if rule.get("caudal_min") is not None:
                         umbrales.setdefault("ADVERTENCIA", rule["caudal_min"])
 
-                last_pt = win_pts[-1] if win_pts else pts_30[-1]
+                last_pt = win_pts[-1] if win_pts else pts_max[-1]
                 last_nivel = last_pt.get("nivel") or st.get("last_nivel") or "PREVENTIVA"
                 last_fecha = last_pt.get("fecha") or st.get("last_fecha")
                 max_nivel = max(
-                    (p.get("nivel") for p in (win_pts or pts_30)),
+                    (p.get("nivel") for p in (win_pts or pts_max)),
                     key=lambda n: SEVERITY.get(n, 0),
                 )
                 code_match = (filter_code is None) or (base_code(st.get("codigo")) == filter_code)
@@ -1116,6 +1453,7 @@ class DGAService:
                         "last": round_num(vals[-1], 3) if vals else None,
                         "count": len(win_pts),
                         "count_30d": len(pts_30),
+                        "count_total": len(pts_max),
                         "critico_count": sum(1 for p in win_pts if p.get("nivel") == "CRITICO"),
                         "advertencia_count": sum(1 for p in win_pts if p.get("nivel") == "ADVERTENCIA"),
                         "preventiva_count": sum(1 for p in win_pts if p.get("nivel") == "PREVENTIVA"),
@@ -1138,6 +1476,87 @@ class DGAService:
             "total_stations": len(stations_out),
             "stations": stations_out,
         }
+
+    def _format_history_xlsx_bytes(self, stations_list, filter_code=None, filter_nivel=None):
+        """Formatea la lista de estaciones y puntos históricos como libro Excel (.xlsx)."""
+        detail_rows = [[
+            "Fecha/Hora Medición", "Código BNA", "Estación / Río", "Tipo", "Comuna", "Región",
+            "Nivel Alerta", "Valor Medido", "Umbral", "Diferencia", "Unidad", "Fuente", "Sincronizado",
+        ]]
+        raw_events = []
+        for st in stations_list:
+            if filter_code and base_code(st.get("codigo")) != filter_code:
+                continue
+            for p in st.get("points", []):
+                if filter_nivel and p.get("nivel") != filter_nivel:
+                    continue
+                val = p.get("valor")
+                umb = p.get("umbral")
+                diff = round_num(val - umb, 3) if isinstance(val, (int, float)) and isinstance(umb, (int, float)) else None
+                raw_events.append((
+                    p.get("ts") or 0,
+                    [
+                        p.get("fecha") or "",
+                        st.get("codigo") or "",
+                        st.get("nombre") or "",
+                        "Embalse" if st.get("tipo_elemento") == "embalse" else "Estación Fluviométrica",
+                        st.get("comuna") or "",
+                        st.get("region_nombre") or "",
+                        p.get("nivel") or "",
+                        val,
+                        umb,
+                        diff,
+                        p.get("unidad") or st.get("unidad") or "",
+                        p.get("fuente") or st.get("fuente") or "",
+                        p.get("sinc") or "",
+                    ],
+                ))
+
+        raw_events.sort(key=lambda item: -item[0])
+        detail_rows.extend(row for _, row in raw_events)
+
+        summary_rows = [[
+            "Código BNA", "Estación / Río", "Tipo", "Comuna", "Región",
+            "Último Nivel", "Máx Nivel", "Último Valor", "Último Umbral", "Unidad",
+            "Mínimo Período", "Máximo Período", "Reg. Período", "Reg. 1 Año",
+            "Críticas", "Advertencias", "Preventivas", "Última Medición",
+        ]]
+        for st in stations_list:
+            if filter_code and base_code(st.get("codigo")) != filter_code:
+                continue
+            stats = st.get("stats") or {}
+            summary_rows.append([
+                st.get("codigo") or "",
+                st.get("nombre") or "",
+                "Embalse" if st.get("tipo_elemento") == "embalse" else "Estación Fluviométrica",
+                st.get("comuna") or "",
+                st.get("region_nombre") or "",
+                st.get("last_nivel") or "",
+                st.get("max_nivel") or "",
+                st.get("last_valor"),
+                st.get("last_umbral"),
+                st.get("unidad") or "",
+                stats.get("min"),
+                stats.get("max"),
+                stats.get("count", 0),
+                stats.get("count_total", stats.get("count_30d", 0)),
+                stats.get("critico_count", 0),
+                stats.get("advertencia_count", 0),
+                stats.get("preventiva_count", 0),
+                st.get("last_fecha") or "",
+            ])
+
+        return _build_xlsx_workbook([
+            ("Registros de Alertas", detail_rows),
+            ("Resumen Estaciones", summary_rows),
+        ])
+
+    def build_alerts_history_xlsx(self, periodo="24h", codigo=None, nivel=None):
+        """Genera planilla Excel (.xlsx) con los eventos y resumen del historial de alertas."""
+        data = self.get_alerts_history(periodo=periodo, codigo=codigo, nivel=nivel)
+        filter_nivel = nivel if nivel in ("CRITICO", "ADVERTENCIA", "PREVENTIVA") else None
+        filter_code = base_code(codigo) if codigo else None
+        return self._format_history_xlsx_bytes(data.get("stations", []), filter_code=filter_code, filter_nivel=filter_nivel)
 
     # ------------------------------------------------------------------ red hidrográfica MOP
     def _river_bbox_and_key(self, station_code, station_name, lat, lng):

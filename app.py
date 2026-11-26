@@ -15,9 +15,10 @@ import logging
 import os
 import re
 import secrets
+from datetime import datetime
 from urllib.parse import urlparse
 
-from flask import Flask, abort, jsonify, render_template, request
+from flask import Flask, Response, abort, jsonify, render_template, request
 from werkzeug.exceptions import HTTPException
 
 from dga_service import CODE_RE, DATA_DIR, REGIONES, finite_number, service
@@ -165,18 +166,40 @@ def get_alertas_cauces():
     return jsonify(service.get_critical_river_geometries())
 
 
-@app.route("/api/alertas/historial")
-def get_alertas_historial():
-    periodo = request.args.get("periodo", "30d").strip()
-    if periodo not in ("24h", "7d", "30d"):
-        abort(400, description="Periodo inválido. Usa 24h, 7d o 30d.")
+VALID_HISTORY_PERIODS = ("24h", "7d", "30d", "60d", "90d", "365d")
+
+
+def _parse_history_params(default_period="30d"):
+    periodo = request.args.get("periodo", default_period).strip()
+    if periodo not in VALID_HISTORY_PERIODS:
+        abort(400, description="Periodo inválido. Usa 24h, 7d, 30d, 60d, 90d o 365d.")
     codigo = request.args.get("codigo", "").strip() or None
     if codigo and not CODE_RE.match(codigo):
         abort(400, description="Código de estación inválido.")
     nivel = request.args.get("nivel", "ALL").strip().upper()
     if nivel not in ("ALL", "CRITICO", "ADVERTENCIA", "PREVENTIVA"):
         abort(400, description="Nivel inválido.")
-    return jsonify(service.get_alerts_history(periodo=periodo, codigo=codigo, nivel=None if nivel == "ALL" else nivel))
+    return periodo, codigo, None if nivel == "ALL" else nivel
+
+
+@app.route("/api/alertas/historial")
+def get_alertas_historial():
+    periodo, codigo, nivel = _parse_history_params("30d")
+    return jsonify(service.get_alerts_history(periodo=periodo, codigo=codigo, nivel=nivel))
+
+
+@app.route("/api/alertas/historial/export")
+def export_alertas_historial():
+    periodo, codigo, nivel = _parse_history_params("24h")
+    xlsx_bytes = service.build_alerts_history_xlsx(periodo=periodo, codigo=codigo, nivel=nivel)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M")
+    scope = codigo or "todas"
+    filename = f"dga_historial_alertas_{scope}_{periodo}_{stamp}.xlsx"
+    return Response(
+        xlsx_bytes,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.route("/api/umbrales", methods=["GET"])

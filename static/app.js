@@ -475,6 +475,11 @@ function bindEvents() {
     renderHistoryView();
   });
 
+  const btnHistoryExport = $('btn-history-export');
+  if (btnHistoryExport) {
+    btnHistoryExport.addEventListener('click', exportHistoryExcel);
+  }
+
   // Delegación para listas (sin onclick inline)
   $('alertas-list').addEventListener('click', (e) => {
     const card = e.target.closest('[data-codigo]');
@@ -2223,11 +2228,25 @@ function checkNewAlerts() {
   State.knownAlertIds = ids;
 }
 
-/* ----------------------------------------------------------------- historial temporal (30 días) */
+/* ----------------------------------------------------------------- historial temporal (1 año / 365 días) */
 const HIST_SVG_NS = 'http://www.w3.org/2000/svg';
 const HIST_LEVEL_COLOR = { CRITICO: '#f43f5e', ADVERTENCIA: '#f59e0b', PREVENTIVA: '#38bdf8' };
 const HIST_SERIES_COLORS = ['#22d3ee', '#f43f5e', '#f59e0b', '#38bdf8', '#10b981', '#a78bfa', '#fb7185', '#fde047'];
-const HIST_PERIOD_LABEL = { '24h': '24 h', '7d': '7 días', '30d': '30 días' };
+const HIST_PERIOD_LABEL = {
+  '24h': '24h',
+  '7d': '7d',
+  '30d': '1m',
+  '90d': '3m',
+  '365d': '1 año',
+};
+const HIST_PERIOD_DAYS = {
+  '24h': 1,
+  '7d': 7,
+  '30d': 30,
+  '60d': 60,
+  '90d': 90,
+  '365d': 365,
+};
 
 function svgEl(tag, attrs = {}, ...children) {
   const node = document.createElementNS(HIST_SVG_NS, tag);
@@ -2272,6 +2291,42 @@ function openHistoryModal(preselectCode = null) {
 
 function closeHistoryModal() {
   $('modal-history').classList.add('hidden');
+}
+
+async function exportHistoryExcel() {
+  const btn = $('btn-history-export');
+  const params = new URLSearchParams({
+    periodo: State.historyPeriod || '24h',
+    nivel: State.historyLevel || 'ALL',
+  });
+  if (State.historyStation && State.historyStation !== '__ALL__') {
+    params.set('codigo', State.historyStation);
+  }
+  const url = `/api/alertas/historial/export?${params.toString()}`;
+  if (btn) btn.disabled = true;
+  try {
+    const resp = await fetch(url, { credentials: 'same-origin' });
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+    const blob = await resp.blob();
+    const disp = resp.headers.get('Content-Disposition') || '';
+    const match = /filename="?([^";]+)"?/i.exec(disp);
+    const filename = (match && match[1]) || `dga_historial_alertas_${State.historyPeriod || '24h'}.xlsx`;
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
+    toast(`✓ Planilla Excel exportada (${filename})`, 'ok');
+  } catch (err) {
+    toast(`No se pudo exportar a Excel: ${err.message}`, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function loadAndRenderHistory() {
@@ -2341,7 +2396,7 @@ function renderHistoryView() {
 
   const periodLabel = HIST_PERIOD_LABEL[State.historyPeriod] || State.historyPeriod;
   const winEndMs = parseAlertTimestamp(data.window_end) || Date.now();
-  const winDays = State.historyPeriod === '24h' ? 1 : (State.historyPeriod === '7d' ? 7 : 30);
+  const winDays = HIST_PERIOD_DAYS[State.historyPeriod] || 30;
   const winStartMs = parseAlertTimestamp(data.window_start) || (winEndMs - winDays * 86400000);
 
   if (stations.length === 0) {
@@ -2385,18 +2440,19 @@ function renderSingleStationHistory(st, winStartMs, winEndMs, periodLabel) {
   const stats = st.stats || {};
   const unit = st.unidad || '';
   const statsBox = $('history-stats');
+  const totalStored = typeof stats.count_total === 'number' ? stats.count_total : (stats.count_30d || 0);
   if (stats.count > 0) {
     statsBox.replaceChildren(
       el('div', {},
         `Mín ${fmt(stats.min, 3)} · Máx ${fmt(stats.max, 3)} · Último ${fmt(stats.last, 3)} ${unit}`),
       el('div', {
         class: 'history-stats-muted',
-        text: `${stats.count} reg. en ${periodLabel} (${stats.count_30d} en 30d)`,
+        text: `${stats.count} reg. en ${periodLabel} (${totalStored} en 1 año)`,
       }),
     );
   } else {
     statsBox.replaceChildren(
-      el('div', { class: 'history-stats-muted', text: `0 registros en las últimas ${periodLabel} (${stats.count_30d || 0} en 30d)` }),
+      el('div', { class: 'history-stats-muted', text: `0 registros en las últimas ${periodLabel} (${totalStored} en 1 año)` }),
     );
   }
 
@@ -2409,7 +2465,7 @@ function renderSingleStationHistory(st, winStartMs, winEndMs, periodLabel) {
   if (pts.length === 0) {
     chartBox.replaceChildren(el('div', { class: 'history-empty' },
       icon('fa-regular fa-clock'),
-      `Esta estación no registró alertas en ${periodLabel}. Prueba cambiar a "7 días" o "30 días".`));
+      `Esta estación no registró alertas en ${periodLabel}. Prueba ampliar a 1m, 3m o 1 año.`));
     readoutEl.textContent = st.last_fecha ? `Último registrado: ${formatReadoutTime(st.last_fecha)} · ${fmt(st.last_valor, 3)} ${unit}` : '--';
     renderHistoryLog([st]);
     return;
@@ -2642,7 +2698,7 @@ function renderMultiStationHistory(stations, winStartMs, winEndMs, periodLabel) 
   if (active.length === 0) {
     chartBox.replaceChildren(el('div', { class: 'history-empty' },
       icon('fa-regular fa-clock'),
-      `Sin lecturas en las últimas ${periodLabel}. Prueba ampliar a 7 días o 30 días.`));
+      `Sin lecturas en las últimas ${periodLabel}. Prueba ampliar a 1m, 3m o 1 año.`));
     readoutEl.textContent = '--';
     renderHistoryLog(stations);
     return;
