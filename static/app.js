@@ -494,7 +494,6 @@ function bindEvents() {
 /* ----------------------------------------------------------------- datos */
 function schedulePoll() {
   clearTimeout(State.pollTimer);
-  if (document.hidden) return;
   State.pollTimer = setTimeout(async () => {
     await refresh(false);
     schedulePoll();
