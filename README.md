@@ -4,7 +4,7 @@ Aplicación web de monitoreo hidrométrico y alertas en tiempo real para **ríos
 
 > **Aviso importante:** Esta web es una herramienta informativa y **no reemplaza las alertas de SENAPRED ni de las autoridades**. Ante riesgo real, prioriza siempre los canales oficiales de emergencia.
 
-![Interfaz Obsidian HUD de DGA Water Monitor](docs/screenshot-hud.png)
+![Interfaz Obsidian HUD de DGA Water Monitor](docs/captura_interfaz.png)
 
 ---
 
@@ -21,7 +21,18 @@ Aplicación web de monitoreo hidrométrico y alertas en tiempo real para **ríos
 
 ---
 
-## Novedades recientes (`v3.0.0`)
+## Novedades recientes (`v3.1.0`)
+
+- **Exportación nativa a Excel (`.xlsx`) y Respaldo Anual (`.zip`):**
+  - Botón **Exportar datos** en el encabezado del modal histórico (`GET /api/alertas/historial/export`) que genera planillas `.xlsx` nativas en memoria usando únicamente la librería estándar de Python (`zipfile` + `xml.sax.saxutils`), sin dependencias externas.
+  - Retención extendida a **1 año (365 días)** con selectores **`24h`**, **`7d`**, **`1m`**, **`3m`** y **`1 año`**.
+  - Archivo automático anual en `data/history_archives/alerts_history_<año>.zip` (conteniendo el `.xlsx` interno) y botón directo **Descargar ZIP del año** en el pie del modal (`GET /api/alertas/historial/archivo-zip`).
+- **Sensor de medición y formato de fechas chileno (`DD/MM/YYYY HH:MM:SS`):**
+  - Popups del mapa y modal de detalle ahora muestran el **Sensor medición** (`Limnímetro / Nivel (m)` o `Caudalímetro (m³/s)`), la unidad en alertas DGA y la fecha de medición formateada.
+  - Todas las fechas en UI (`fmtDateCL`) y en exportación `.xlsx` (`_format_xlsx_datetime`) se normalizan a `DD/MM/YYYY HH:MM:SS`.
+- **Notificaciones en segundo plano:** Corrección del polling en `schedulePoll()` para mantener activas las consultas y notificaciones de escritorio incluso cuando la pestaña está oculta o el navegador minimizado.
+
+### Cambios anteriores (`v3.0.0`)
 
 - **Trazado geográfico exacto de ríos en alerta (`MAPA_BASE/RED_HIDROGRAFICA` 1:250k):** Los ríos con alertas **Críticas (rojo)**, **Advertencias (ámbar)** y **Preventivas (azul/cian)** ahora se destacan directamente sobre el mapa siguiendo el cauce oficial del MOP con polilíneas animadas, halos pulsantes y tooltips interactivos (`/api/alertas/cauces` + caché local en `data/rivers_cache.json`).
 - **Galería de Sonidos de Alerta (Web Audio API):** Nuevo panel desplegable junto a la campana para elegir y probar tonos sintetizados diferenciados por severidad, incluyendo alarma crítica estilo **Sirena Nuclear / Klaxon Bunker / Alerta Geiger**, tonos ámbar de **Advertencia** y chimes suaves **Preventivos** (persistidos en `localStorage`).

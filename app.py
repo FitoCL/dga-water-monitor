@@ -202,6 +202,24 @@ def export_alertas_historial():
     )
 
 
+@app.route("/api/alertas/historial/archivo-zip")
+def download_history_archive_zip():
+    year = request.args.get("year", "").strip() or None
+    if year and (not year.isdigit() or len(year) != 4):
+        abort(400, description="Año inválido (debe ser formato YYYY).")
+    filename, zip_bytes = service.get_history_archive_zip_bytes(year=year)
+    return Response(
+        zip_bytes,
+        mimetype="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.route("/api/alertas/historial/archivos")
+def list_history_archives():
+    return jsonify(service.list_history_archives())
+
+
 @app.route("/api/umbrales", methods=["GET"])
 def get_umbrales():
     return jsonify(service.get_config())

@@ -1477,6 +1477,26 @@ class DGAService:
             "stations": stations_out,
         }
 
+    @staticmethod
+    def _format_xlsx_datetime(val):
+        """Normaliza fechas/horas a formato chileno DD/MM/YYYY HH:MM:SS para Excel."""
+        if not val:
+            return ""
+        s = str(val).strip()
+        if not s:
+            return ""
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M"):
+            try:
+                dt = datetime.strptime(s[:19], fmt)
+                return dt.strftime("%d/%m/%Y %H:%M:%S")
+            except ValueError:
+                continue
+        try:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            return dt.strftime("%d/%m/%Y %H:%M:%S")
+        except ValueError:
+            return s
+
     def _format_history_xlsx_bytes(self, stations_list, filter_code=None, filter_nivel=None):
         """Formatea la lista de estaciones y puntos históricos como libro Excel (.xlsx)."""
         detail_rows = [[
@@ -1496,7 +1516,7 @@ class DGAService:
                 raw_events.append((
                     p.get("ts") or 0,
                     [
-                        p.get("fecha") or "",
+                        self._format_xlsx_datetime(p.get("fecha")),
                         st.get("codigo") or "",
                         st.get("nombre") or "",
                         "Embalse" if st.get("tipo_elemento") == "embalse" else "Estación Fluviométrica",
@@ -1508,7 +1528,7 @@ class DGAService:
                         diff,
                         p.get("unidad") or st.get("unidad") or "",
                         p.get("fuente") or st.get("fuente") or "",
-                        p.get("sinc") or "",
+                        self._format_xlsx_datetime(p.get("sinc")),
                     ],
                 ))
 
@@ -1543,7 +1563,7 @@ class DGAService:
                 stats.get("critico_count", 0),
                 stats.get("advertencia_count", 0),
                 stats.get("preventiva_count", 0),
-                st.get("last_fecha") or "",
+                self._format_xlsx_datetime(st.get("last_fecha")),
             ])
 
         return _build_xlsx_workbook([
@@ -1557,6 +1577,73 @@ class DGAService:
         filter_nivel = nivel if nivel in ("CRITICO", "ADVERTENCIA", "PREVENTIVA") else None
         filter_code = base_code(codigo) if codigo else None
         return self._format_history_xlsx_bytes(data.get("stations", []), filter_code=filter_code, filter_nivel=filter_nivel)
+
+    def list_history_archives(self):
+        """Lista los respaldos anuales comprimidos en ZIP disponibles en data/history_archives."""
+        os.makedirs(HISTORY_ARCHIVE_DIR, exist_ok=True)
+        archives = []
+        try:
+            for fname in sorted(os.listdir(HISTORY_ARCHIVE_DIR), reverse=True):
+                if not fname.lower().endswith(".zip"):
+                    continue
+                fpath = os.path.join(HISTORY_ARCHIVE_DIR, fname)
+                try:
+                    st = os.stat(fpath)
+                    archives.append({
+                        "filename": fname,
+                        "size_bytes": st.st_size,
+                        "updated": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+                        "year": fname.replace("alerts_history_", "").replace(".zip", "")
+                    })
+                except OSError:
+                    continue
+        except Exception as e:
+            log.warning("Error listando respaldos históricos: %s", e)
+        return archives
+
+    def get_history_archive_zip_bytes(self, year=None):
+        """Retorna (filename, bytes) del archivo ZIP de respaldo del año solicitado o el más reciente.
+        Si no hay ZIP archivado previo, genera al vuelo el respaldo anual ZIP con el .xlsx interior."""
+        os.makedirs(HISTORY_ARCHIVE_DIR, exist_ok=True)
+        target_year = str(year).strip() if year else None
+
+        # 1. Si existe un archivo archivado en disco
+        if target_year:
+            direct_path = os.path.join(HISTORY_ARCHIVE_DIR, f"alerts_history_{target_year}.zip")
+            if os.path.exists(direct_path):
+                with open(direct_path, "rb") as f:
+                    return f"alerts_history_{target_year}.zip", f.read()
+
+        # Buscar el ZIP más reciente existente
+        archives = self.list_history_archives()
+        if archives and not target_year:
+            latest = archives[0]["filename"]
+            with open(os.path.join(HISTORY_ARCHIVE_DIR, latest), "rb") as f:
+                return latest, f.read()
+
+        # 2. Si no hay ZIP previo generado por rotación, generar el ZIP del registro del año actual
+        yr = target_year or str(now().year)
+        inner_xlsx = f"alerts_history_{yr}.xlsx"
+        # Obtener datos del año (período 365d)
+        data = self.get_alerts_history(periodo="365d")
+        xlsx_bytes = self._format_history_xlsx_bytes(data.get("stations", []))
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+            zf.writestr(inner_xlsx, xlsx_bytes)
+        zip_bytes = buf.getvalue()
+
+        # Guardar en data/history_archives para persistencia
+        out_name = f"alerts_history_{yr}.zip"
+        zip_path = os.path.join(HISTORY_ARCHIVE_DIR, out_name)
+        try:
+            with _FILE_WRITE_LOCK:
+                with open(zip_path, "wb") as f:
+                    f.write(zip_bytes)
+        except Exception as e:
+            log.warning("No se pudo persistir zip generado %s: %s", zip_path, e)
+
+        return out_name, zip_bytes
 
     # ------------------------------------------------------------------ red hidrográfica MOP
     def _river_bbox_and_key(self, station_code, station_name, lat, lng):

@@ -419,14 +419,20 @@
           <div id="history-log-list" class="history-log-list"></div>
         </div>
 
-        <p id="history-footnote" class="history-footnote">
-          Hora de medición informada por la DGA. Las alertas Críticas, Advertencias y Preventivas se guardan temporalmente durante 1 año (365 días) en cada sincronización.
-        </p>
+        <div class="history-footer-row">
+          <p id="history-footnote" class="history-footnote">
+            Hora de medición informada por la DGA. Las alertas Críticas, Advertencias y Preventivas se guardan temporalmente durante 1 año (365 días) en cada sincronización.
+          </p>
+          <button id="btn-history-zip" class="hud-pill hud-pill-zip" type="button" title="Descargar respaldo anual en archivo comprimido ZIP (.zip con .xlsx)">
+            <i class="fa-solid fa-file-zipper" aria-hidden="true"></i>
+            <span>Descargar ZIP del año</span>
+          </button>
+        </div>
       </div>
     </div>
   </div>
 
   <script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js', v='4') }}"></script>
-  <script src="{{ url_for('static', filename='app.js', v='59') }}"></script>
+  <script src="{{ url_for('static', filename='app.js', v='61') }}"></script>
 </body>
 </html>

@@ -3049,6 +3049,51 @@ body {
   font-size: 0.72rem;
   color: #64748b;
   line-height: 1.4;
+  margin: 0;
+  flex: 1;
+}
+
+.history-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 4px;
+}
+
+.hud-pill-zip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  color: #fef3c7;
+  font-family: inherit;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.16s ease;
+}
+
+.hud-pill-zip i {
+  color: #f59e0b;
+  font-size: 0.85rem;
+}
+
+.hud-pill-zip:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.26);
+  border-color: rgba(251, 191, 36, 0.85);
+  color: #ffffff;
+  box-shadow: 0 0 12px rgba(245, 158, 11, 0.32);
+}
+
+.hud-pill-zip:disabled {
+  opacity: 0.6;
+  cursor: wait;
 }
 
 @media (max-width: 640px) {

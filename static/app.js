@@ -91,6 +91,16 @@ function fmt(n, dec = 2) {
   return Number(n).toLocaleString('es-CL', { maximumFractionDigits: dec, minimumFractionDigits: 0 });
 }
 
+function fmtDateCL(val) {
+  if (!val) return '--';
+  const s = String(val).trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}:\d{2}(?::\d{2})?))?/.exec(s);
+  if (m) {
+    return m[4] ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}` : `${m[3]}/${m[2]}/${m[1]}`;
+  }
+  return s;
+}
+
 function levelClass(estado) { return String(estado || 'NORMAL').toLowerCase(); }
 
 function badge(estado) {
@@ -480,6 +490,11 @@ function bindEvents() {
     btnHistoryExport.addEventListener('click', exportHistoryExcel);
   }
 
+  const btnHistoryZip = $('btn-history-zip');
+  if (btnHistoryZip) {
+    btnHistoryZip.addEventListener('click', downloadHistoryZip);
+  }
+
   // Delegación para listas (sin onclick inline)
   $('alertas-list').addEventListener('click', (e) => {
     const card = e.target.closest('[data-codigo]');
@@ -599,7 +614,7 @@ function updateDynamicKPIs(s) {
 
   if (s) {
     $('kpi-time').textContent = s.last_sync ? s.last_sync.split(' ')[1] : 'Pendiente';
-    $('kpi-time').title = s.last_sync || '';
+    $('kpi-time').title = s.last_sync ? fmtDateCL(s.last_sync) : '';
     const histBadge = $('history-badge');
     if (histBadge) {
       const cnt = typeof s.total_historial_estaciones === 'number' ? s.total_historial_estaciones : alts.length;
@@ -1364,9 +1379,17 @@ function buildPopup(item) {
     const c = item.ultimo_caudal;
     addRow('Comuna', item.comuna || '--');
     addEstadoRow();
+    const sensorLabel = isOfficial
+      ? ((item.alerta.unidad === 'm³/s' || item.alerta.unidad === 'm3/s') ? 'Caudalímetro (m³/s)' : `Limnímetro / Nivel (${item.alerta.unidad || 'm'})`)
+      : (c ? 'Caudalímetro (m³/s)' : 'Sin sensor activo');
+    addRow('Sensor medición', sensorLabel);
     addRow('Último caudal', c ? `${fmt(c.valor, 2)} m³/s` : 'Sin registro');
     if (isOfficial) {
-      addRow('Alerta DGA', `${fmt(item.alerta.valor_actual, 2)} / ${fmt(item.alerta.umbral, 2)}`);
+      addRow('Alerta DGA', `${fmt(item.alerta.valor_actual, 2)} / ${fmt(item.alerta.umbral, 2)} ${item.alerta.unidad || 'm'}`);
+    }
+    const fechaMed = (isOfficial && item.alerta.fecha) || (c && c.fecha);
+    if (fechaMed) {
+      addRow('Medición', fmtDateCL(fechaMed));
     }
   }
 
@@ -1712,9 +1735,13 @@ async function openModal(item) {
   } else {
     const c = detail.ultimo_caudal;
     const of = detail.alerta_oficial;
-    addSpec('Último caudal', c ? `${fmt(c.valor, 3)} m³/s (${c.fecha})` : 'Sin dato publicado', true);
+    const sensorModal = of
+      ? ((of.unidad === 'm³/s' || of.unidad === 'm3/s') ? 'Caudalímetro (m³/s)' : `Limnímetro / Nivel (${of.unidad || 'm'})`)
+      : (c ? 'Caudalímetro (m³/s)' : 'Sin sensor activo');
+    addSpec('Sensor medición', sensorModal, true);
+    addSpec('Último caudal', c ? `${fmt(c.valor, 3)} m³/s (${fmtDateCL(c.fecha)})` : 'Sin dato publicado', true);
     if (of) {
-      addSpec('Alerta DGA', `${fmt(of.valor, 3)} / umbral ${fmt(of.umbral, 3)}`, true);
+      addSpec('Alerta DGA', `${fmt(of.valor, 3)} / umbral ${fmt(of.umbral, 3)} ${of.unidad || 'm'}`, true);
     }
     addSpecNode('Estado red', makeEstadoRedNode());
     $('lbl-thresh-min').textContent = 'Caudal mínimo (estiaje):';
@@ -1729,7 +1756,7 @@ async function openModal(item) {
     if (c) {
       const dias = Math.floor((Date.now() - new Date(`${c.fecha}T00:00:00`).getTime()) / 86400000);
       if (dias > 7) {
-        $('modal-stale-texto').textContent = `El último caudal diario validado por la DGA es del ${c.fecha} (hace ${dias} días). Los umbrales personalizados se evalúan sobre ese dato; las alertas DGA oficiales sí son en tiempo real.`;
+        $('modal-stale-texto').textContent = `El último caudal diario validado por la DGA es del ${fmtDateCL(c.fecha)} (hace ${dias} días). Los umbrales personalizados se evalúan sobre ese dato; las alertas DGA oficiales sí son en tiempo real.`;
         $('modal-stale').classList.remove('hidden');
       }
     }
@@ -1856,7 +1883,7 @@ async function forceSync() {
         if (summary.last_error) {
           toast(`Sincronización parcial: ${summary.last_error}`, 'error');
         } else {
-          toast(`✓ Sincronización completada (${summary.last_sync || ''})`, 'ok');
+          toast(`✓ Sincronización completada (${summary.last_sync ? fmtDateCL(summary.last_sync) : ''})`, 'ok');
         }
         return;
       }
@@ -2323,6 +2350,35 @@ async function exportHistoryExcel() {
     toast(`✓ Planilla Excel exportada (${filename})`, 'ok');
   } catch (err) {
     toast(`No se pudo exportar a Excel: ${err.message}`, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function downloadHistoryZip() {
+  const btn = $('btn-history-zip');
+  if (btn) btn.disabled = true;
+  try {
+    toast('Generando descarga del archivo ZIP del año...', 'info');
+    const resp = await fetch('/api/alertas/historial/archivo-zip', { credentials: 'same-origin' });
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+    const blob = await resp.blob();
+    const disp = resp.headers.get('Content-Disposition') || '';
+    const match = /filename="?([^";]+)"?/i.exec(disp);
+    const filename = (match && match[1]) || 'alerts_history.zip';
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
+    toast(`✓ Respaldo anual descargado (${filename})`, 'ok');
+  } catch (err) {
+    toast(`No se pudo descargar el ZIP: ${err.message}`, 'error');
   } finally {
     if (btn) btn.disabled = false;
   }
