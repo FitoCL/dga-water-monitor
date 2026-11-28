@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>DGA Water Monitor - Manual de Usuario y Guía Técnica</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 1.8cm 1.5cm;
+      @bottom-right {
+        content: counter(page);
+      }
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #1e293b;
+      line-height: 1.55;
+      font-size: 10pt;
+      margin: 0;
+      padding: 0;
+    }
+    .cover {
+      page-break-after: always;
+      text-align: center;
+      padding-top: 5cm;
+    }
+    .cover-badge {
+      display: inline-block;
+      padding: 4px 14px;
+      background: #0ea5e9;
+      color: #ffffff;
+      font-weight: 700;
+      font-size: 11pt;
+      border-radius: 999px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: 20px;
+    }
+    .cover h1 {
+      font-size: 28pt;
+      color: #0f172a;
+      margin: 0 0 10px 0;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+    .cover h2 {
+      font-size: 15pt;
+      color: #475569;
+      font-weight: 500;
+      margin: 0 0 35px 0;
+    }
+    .cover-meta {
+      margin-top: 5cm;
+      font-size: 10pt;
+      color: #64748b;
+      line-height: 1.8;
+      border-top: 1px solid #e2e8f0;
+      padding-top: 20px;
+      width: 80%;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .section-title {
+      color: #0f172a;
+      font-size: 16pt;
+      font-weight: 700;
+      border-bottom: 2px solid #0ea5e9;
+      padding-bottom: 5px;
+      margin-top: 25px;
+      margin-bottom: 14px;
+      page-break-after: avoid;
+    }
+    .subsection-title {
+      color: #1e293b;
+      font-size: 12pt;
+      font-weight: 700;
+      margin-top: 18px;
+      margin-bottom: 8px;
+      page-break-after: avoid;
+    }
+    p, li {
+      text-align: justify;
+    }
+    ul, ol {
+      margin-top: 6px;
+      margin-bottom: 12px;
+      padding-left: 20px;
+    }
+    li {
+      margin-bottom: 4px;
+    }
+    .img-box {
+      text-align: center;
+      margin: 15px 0;
+      page-break-inside: avoid;
+    }
+    .img-box img {
+      max-width: 95%;
+      height: auto;
+      border-radius: 6px;
+      border: 1px solid #cbd5e1;
+      box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+    }
+    .img-caption {
+      font-size: 8.5pt;
+      color: #64748b;
+      margin-top: 6px;
+      font-style: italic;
+    }
+    .callout {
+      background: #f8fafc;
+      border-left: 4px solid #0ea5e9;
+      padding: 10px 14px;
+      border-radius: 0 6px 6px 0;
+      margin: 12px 0;
+      font-size: 9.5pt;
+      page-break-inside: avoid;
+    }
+    .callout-warning {
+      background: #fffbeb;
+      border-left-color: #f59e0b;
+      color: #92400e;
+    }
+    .callout-danger {
+      background: #fef2f2;
+      border-left-color: #ef4444;
+      color: #991b1b;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0;
+      font-size: 9pt;
+      page-break-inside: avoid;
+    }
+    th, td {
+      border: 1px solid #cbd5e1;
+      padding: 7px 10px;
+      text-align: left;
+    }
+    th {
+      background: #f1f5f9;
+      color: #0f172a;
+      font-weight: 700;
+    }
+    tr:nth-child(even) {
+      background: #f8fafc;
+    }
+    .code-tag {
+      font-family: Consolas, monospace;
+      background: #e2e8f0;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 8.5pt;
+      color: #0f172a;
+    }
+    .page-break {
+      page-break-after: always;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- PORTADA -->
+  <div class="cover">
+    <div class="cover-badge">Manual de Usuario y Guía Técnica</div>
+    <h1>DGA Water Monitor</h1>
+    <h2>Sistema de Monitoreo Hidrológico y Alertas en Tiempo Real</h2>
+    <p style="color: #64748b; font-size: 11pt; max-width: 600px; margin: 0 auto;">
+      Guía integral de operación, arquitectura, visualización geoespacial, exportación de datos y telemetría de caudales y ríos de Chile.
+    </p>
+    <div class="cover-meta">
+      <strong>Versión del Sistema:</strong> v3.1.0<br>
+      <strong>Autor / Repositorio:</strong> FitoCL / dga-water-monitor<br>
+      <strong>Fuente Oficial:</strong> Dirección General de Aguas (DGA - MOP Chile)<br>
+      <strong>Fecha de Publicación:</strong> Noviembre 2026
+    </div>
+  </div>
+
+  <!-- AVISO LEGAL Y SECCIÓN 1 -->
+  <div class="callout callout-warning">
+    <strong>Aviso Importante:</strong> Esta plataforma es una herramienta informativa basada en datos abiertos de la Dirección General de Aguas (DGA). <strong>No sustituye las alertas ni decretos oficiales emitidos por SENAPRED</strong> ni los organismos de emergencia competentes.
+  </div>
+
+  <h2 class="section-title">1. Introducción y Propósito</h2>
+  <p>
+    <strong>DGA Water Monitor</strong> es una aplicación web especializada en telemetría hidrológica en tiempo real, diseñada para proporcionar supervisión operativa de ríos, estaciones fluviométricas y embalses en las 16 regiones de Chile. La plataforma procesa flujos de datos continuos desde los servicios públicos de la DGA y cartografía de precisión del Ministerio de Obras Públicas (MOP), traduciendo variables hidráulicas complejas en una interfaz interactiva de alta visibilidad (estilo Obsidian HUD).
+  </p>
+
+  <h3 class="subsection-title">1.1 Características Clave</h3>
+  <ul>
+    <li><strong>Cobertura Nacional:</strong> Monitoreo de más de 580 estaciones activas con registro oficial y seguimiento de los 11 principales embalses del país.</li>
+    <li><strong>Alertas en Tiempo Real:</strong> Clasificación instantánea por severidad: <strong>Crítica (Roja)</strong>, <strong>Advertencia (Amarilla)</strong> y <strong>Preventiva (Azul)</strong>.</li>
+    <li><strong>Red Hidrográfica Oficial:</strong> Trazado vectorial 1:250.000 de ríos en alerta, con segmentación cromática aguas abajo y corte automático en estaciones normales.</li>
+    <li><strong>Registro Histórico Prolongado:</strong> Almacenamiento continuo con retención de hasta 1 año (365 días), visualización de evolución en gráficos SVG y exportación a planillas Excel (.xlsx).</li>
+    <li><strong>Respaldos Automáticos ZIP:</strong> Compresión anual de históricos en formato ZIP con integridad de datos garantizada.</li>
+  </ul>
+
+  <div class="img-box">
+    <img src="captura_interfaz.png" alt="Vista General del Dashboard">
+    <div class="img-caption">Figura 1: Vista general panorámica del panel de control de DGA Water Monitor.</div>
+  </div>
+
+  <div class="page-break"></div>
+
+  <!-- SECCIÓN 2: INTERFAZ Y NAVEGACIÓN -->
+  <h2 class="section-title">2. Manual de Operación de la Interfaz</h2>
+
+  <h3 class="subsection-title">2.1 Barra Superior y Reloj Oficial</h3>
+  <p>
+    En la cabecera del sistema se ubica el título, el botón de acceso al <strong>Historial de alertas</strong> (con contador dinámico de estaciones con registros), el selector de volumen/sonido y el <strong>Reloj Oficial de Chile continental</strong> (<span class="code-tag">America/Santiago</span>). Este reloj garantiza la sincronización visual exacta con los horarios de medición emitidos por las estaciones telemétricas.
+  </p>
+
+  <h3 class="subsection-title">2.2 Tarjetas KPI Dinámicas</h3>
+  <p>
+    El panel superior cuenta con 7 métricas clave que se recalculan en tiempo real:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th>Métrica KPI</th>
+        <th>Descripción</th>
+        <th>Acción Interactiva</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Ríos activos</strong></td>
+        <td>Total de estaciones fluviométricas operativas con transmisión.</td>
+        <td>Filtra el mapa y lista para visualizar únicamente puntos con datos vigentes.</td>
+      </tr>
+      <tr>
+        <td><strong>Inactivas / Sin registro</strong></td>
+        <td>Estaciones en catastro sin transmisión telemétrica reciente.</td>
+        <td>Permite auditar estaciones fuera de servicio o de lectura manual.</td>
+      </tr>
+      <tr>
+        <td><strong>Embalses y lagos</strong></td>
+        <td>Infraestructura de acumulación con reporte de nivel y volumen.</td>
+        <td>Aísla los embalses en el mapa mostrando porcentaje de capacidad.</td>
+      </tr>
+      <tr>
+        <td><strong>Críticas / Advertencias / Prev.</strong></td>
+        <td>Contadores segregados de estaciones que superan umbrales de alerta.</td>
+        <td>Al hacer clic en una tarjeta de alerta, el mapa muestra con exclusividad ese nivel de severidad.</td>
+      </tr>
+      <tr>
+        <td><strong>Última sincronización</strong></td>
+        <td>Hora exacta de la última consulta contra la API oficial DGA.</td>
+        <td>Permanece fija indicando la frescura del dato (ciclo automático cada 60 s).</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 class="subsection-title">2.3 Mapa Interactivo y Red Hidrográfica</h3>
+  <p>
+    El visor geográfico utiliza la tecnología Leaflet optimizada con capas vectoriales y mosaicos oscuros (CartoDB Dark Matter), satelitales y topográficos.
+  </p>
+  <ul>
+    <li><strong>Destacado de Cauces:</strong> Los tramos fluviales asociados a estaciones en alerta se iluminan con polilíneas animadas siguiendo el curso natural del río. Si aguas abajo existe una estación en nivel normal, el resaltado se interrumpe de forma precisa en dicho punto.</li>
+    <li><strong>Marcadores Inteligentes:</strong> Cada icono refleja el estado del río (pulsante en rojo para críticos, ámbar para advertencias y azul para preventivas).</li>
+    <li><strong>Buscador Global:</strong> Permite localizar cualquier cauce o código BNA por teclado (<span class="code-tag">↑</span> / <span class="code-tag">↓</span> / <span class="code-tag">Enter</span>).</li>
+  </ul>
+
+  <div class="page-break"></div>
+
+  <!-- SECCIÓN 3: MODAL HISTÓRICO Y EXPORTACIÓN -->
+  <h2 class="section-title">3. Registro Histórico, Exportación y Respaldos</h2>
+
+  <h3 class="subsection-title">3.1 Visualización y Filtros Temporales</h3>
+  <p>
+    Al pulsar sobre <strong>Historial alertas</strong> o el botón <strong>Evolución</strong> en una estación, se abre el modal de telemetría histórica. Permite alternar entre los siguientes intervalos de retención temporal:
+  </p>
+  <ul>
+    <li><span class="code-tag">24h</span>: Evolución horaria de las últimas 24 horas (vista por defecto).</li>
+    <li><span class="code-tag">7d</span>: Tendencia semanal de caudales y niveles.</li>
+    <li><span class="code-tag">1m</span>: Comportamiento a 30 días.</li>
+    <li><span class="code-tag">3m</span>: Historial trimestral (90 días).</li>
+    <li><span class="code-tag">1 año</span>: Registro acumulado de 365 días continuos.</li>
+  </ul>
+
+  <h3 class="subsection-title">3.2 Exportación Nativa a Planilla Excel (.xlsx)</h3>
+  <p>
+    En la esquina superior derecha del modal se encuentra el botón verde <strong>Exportar datos</strong>. Al pulsarlo:
+  </p>
+  <ol>
+    <li>El servidor compila en memoria un libro <span class="code-tag">.xlsx</span> nativo con formato estándar internacional.</li>
+    <li><strong>Hoja 1 ("Registros de Alertas"):</strong> Detalla cada medición con Fecha/Hora en formato chileno (<span class="code-tag">DD/MM/YYYY HH:MM:SS</span>), Código BNA, Estación, Tipo de sensor, Nivel, Valor medido, Umbral, Diferencia y Fecha de Sincronización.</li>
+    <li><strong>Hoja 2 ("Resumen Estaciones"):</strong> Métricas consolidadas (Mínimo, Máximo, Conteos por severidad y última lectura).</li>
+    <li>La descarga se inicia automáticamente en el navegador sin intermediarios.</li>
+  </ol>
+
+  <h3 class="subsection-title">3.3 Descarga de Respaldo Anual en ZIP</h3>
+  <p>
+    En la esquina inferior derecha del pie del modal se ubica el botón <strong>Descargar ZIP del año</strong>. Este mecanismo empaqueta el libro Excel anual dentro de un archivo comprimido <span class="code-tag">alerts_history_&lt;año&gt;.zip</span>, ideal para archivado institucional y análisis retrospectivo.
+  </p>
+
+  <h2 class="section-title">4. Notificaciones y Sensores de Medición</h2>
+  <h3 class="subsection-title">4.1 Identificación Técnica de Sensores</h3>
+  <p>
+    Tanto en las fichas emergentes del mapa como en el modal de detalle se especifica el instrumento de medición oficial:
+  </p>
+  <ul>
+    <li><strong>Limnímetro / Sensor de Nivel:</strong> Reporta altura de agua en metros (<span class="code-tag">m</span>) con respecto a la cota cero de la estación.</li>
+    <li><strong>Caudalímetro / Aforo Fluviométrico:</strong> Reporta gasto volumétrico en metros cúbicos por segundo (<span class="code-tag">m³/s</span>).</li>
+  </ul>
+
+  <h3 class="subsection-title">4.2 Notificaciones en Segundo Plano</h3>
+  <p>
+    El sistema cuenta con integración con la <strong>Notification API</strong> del navegador. El servicio de polling continúa activo en segundo plano, despachando alertas sonoras y notificaciones emergentes de escritorio ante eventos críticos o variaciones de nivel, incluso con la pestaña minimizada.
+  </p>
+
+  <div class="page-break"></div>
+
+  <!-- SECCIÓN 5: ARQUITECTURA Y STACK TÉCNICO -->
+  <h2 class="section-title">5. Arquitectura Técnica y Stack Tecnológico</h2>
+  <p>
+    La aplicación sigue las directrices de diseño de la skill <span class="code-tag">python-hud-api-stack</span>, garantizando alta resiliencia, bajo consumo de recursos y total independencia de gestores de paquetes JavaScript (cero dependencias de Node.js, Webpack o Vite).
+  </p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Componente</th>
+        <th>Tecnología</th>
+        <th>Rol y Responsabilidad</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Servidor WSGI</strong></td>
+        <td>Waitress 3.0+</td>
+        <td>Servidor de producción multiproceso (8 hilos) sin banners de servidor (<span class="code-tag">ident=None</span>).</td>
+      </tr>
+      <tr>
+        <td><strong>Framework Web</strong></td>
+        <td>Python Flask 3.1+</td>
+        <td>Enrutamiento REST, cabeceras de seguridad CSP, protección anti-CSRF y límites estrictos de payload.</td>
+      </tr>
+      <tr>
+        <td><strong>Cliente HTTP</strong></td>
+        <td>Requests + urllib3</td>
+        <td>Conexión con ArcGIS MOP mediante sesiones persistentes, backoff exponencial y TLS estricto.</td>
+      </tr>
+      <tr>
+        <td><strong>Persistencia</strong></td>
+        <td>JSON Atómico</td>
+        <td>Escritura segura en disco con exclusión mutua (<span class="code-tag">_FILE_WRITE_LOCK</span>) y reemplazo atómico (<span class="code-tag">os.replace</span>).</td>
+      </tr>
+      <tr>
+        <td><strong>Frontend</strong></td>
+        <td>Vanilla JS (ES6+)</td>
+        <td>Construcción segura del árbol DOM (sin <span class="code-tag">innerHTML</span> sin sanitizar) y manipulación asíncrona.</td>
+      </tr>
+      <tr>
+        <td><strong>Motor de Audio</strong></td>
+        <td>Web Audio API</td>
+        <td>Síntesis de osciladores para alarmas y tonos sin necesidad de cargar archivos MP3/WAV externos.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 class="subsection-title">5.1 Puntos de Entrada API (Endpoints)</h3>
+  <ul>
+    <li><span class="code-tag">GET /api/summary</span>: Resumen global de métricas KPI y estado del sistema.</li>
+    <li><span class="code-tag">GET /api/estaciones?region=...</span>: Catálogo de estaciones filtradas por región geográfica.</li>
+    <li><span class="code-tag">GET /api/alertas</span>: Listado ordenado de alertas oficiales activas.</li>
+    <li><span class="code-tag">GET /api/alertas/cauces</span>: Geometrías GeoJSON de tramos de ríos en alerta.</li>
+    <li><span class="code-tag">GET /api/alertas/historial</span>: Puntos temporales y evolución para gráficos SVG.</li>
+    <li><span class="code-tag">GET /api/alertas/historial/export</span>: Descarga directa de planilla Excel (.xlsx).</li>
+    <li><span class="code-tag">GET /api/alertas/historial/archivo-zip</span>: Descarga de archivo comprimido (.zip) con el histórico anual.</li>
+    <li><span class="code-tag">POST /api/sync</span>: Sincronización manual forzada (con cooldown anti-saturación).</li>
+  </ul>
+
+  <h2 class="section-title">6. Despliegue y Ejecución</h2>
+  <p>
+    Para ejecutar la solución en un entorno local o de servidor:
+  </p>
+  <ol>
+    <li>Instalar dependencias: <span class="code-tag">pip install -r requirements.txt</span></li>
+    <li>Iniciar servidor: <span class="code-tag">python app.py</span></li>
+    <li>Acceder en el navegador: <span class="code-tag">http://127.0.0.1:5000</span></li>
+  </ol>
+
+  <div class="callout">
+    <strong>Configuración de Producción:</strong> Mediante las variables de entorno <span class="code-tag">DGA_HOST=0.0.0.0</span>, <span class="code-tag">DGA_PORT=5000</span> y <span class="code-tag">DGA_ADMIN_TOKEN</span> se puede exponer el servicio a la red interna con control de acceso administrativo.
+  </div>
+
+</body>
+</html>
